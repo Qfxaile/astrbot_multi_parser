@@ -1,0 +1,57 @@
+{
+  "enabled_platforms": {
+    "description": "启用的平台解析器，可选 bilibili、douyin、redbook",
+    "type": "list",
+    "default": ["bilibili", "douyin", "redbook"]
+  },
+  "douyin_api_url": {
+    "description": "抖音解析 API 地址",
+    "type": "string",
+    "default": "http://api.xingzhige.cn/API/douyin/"
+  },
+  "redbook_api_url": {
+    "description": "小红书解析 API 地址",
+    "type": "string",
+    "default": "http://127.0.0.1:6666/xhs/detail"
+  },
+  "request_timeout_seconds": {
+    "description": "接口请求超时时间（秒）",
+    "type": "int",
+    "default": 30
+  },
+  "send_video_by_url": {
+    "description": "解析到视频直链后是否直接通过 URL 发送视频",
+    "type": "bool",
+    "default": true
+  },
+  "max_video_size_mb": {
+    "description": "直接发送视频的最大体积（MB），超过后改用合并转发发送解析链接；小于等于 0 表示不限制",
+    "type": "float",
+    "default": 100
+  },
+  "allow_unknown_video_size": {
+    "description": "无法通过 HEAD/Range 获取视频大小时，是否仍然直接发送视频",
+    "type": "bool",
+    "default": false
+  },
+  "size_check_timeout_seconds": {
+    "description": "视频大小检查请求超时时间（秒）",
+    "type": "float",
+    "default": 10
+  },
+  "enable_parse_reaction": {
+    "description": "解析成功后是否给原消息添加表情回应",
+    "type": "bool",
+    "default": true
+  },
+  "reaction_action": {
+    "description": "OneBot 表情回应动作名，不同协议端可能不同，默认使用 set_msg_emoji_like",
+    "type": "string",
+    "default": "set_msg_emoji_like"
+  },
+  "reaction_emoji_id": {
+    "description": "解析成功时使用的表情 ID，默认 124",
+    "type": "string",
+    "default": "124"
+  }
+}
