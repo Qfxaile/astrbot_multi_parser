@@ -1,57 +1,66 @@
 {
   "enabled_platforms": {
-    "description": "启用的平台解析器，可选 bilibili、douyin、redbook",
+    "description": "启用平台",
     "type": "list",
-    "default": ["bilibili", "douyin", "redbook"]
+    "default": ["bilibili", "douyin", "redbook"],
+    "hint": "可选 bilibili、douyin、redbook。"
   },
   "douyin_api_url": {
-    "description": "抖音解析 API 地址",
+    "description": "抖音 API",
     "type": "string",
     "default": "http://api.xingzhige.cn/API/douyin/"
   },
   "redbook_api_url": {
-    "description": "小红书解析 API 地址",
+    "description": "小红书 API",
     "type": "string",
     "default": "http://127.0.0.1:6666/xhs/detail"
   },
   "request_timeout_seconds": {
-    "description": "接口请求超时时间（秒）",
+    "description": "请求超时",
     "type": "int",
-    "default": 30
+    "default": 30,
+    "hint": "解析接口请求超时时间，单位为秒。"
   },
   "send_video_by_url": {
-    "description": "解析到视频直链后是否直接通过 URL 发送视频",
+    "description": "直发视频",
     "type": "bool",
-    "default": true
+    "default": true,
+    "hint": "解析到视频直链后，直接通过 URL 发送视频。"
   },
   "max_video_size_mb": {
-    "description": "直接发送视频的最大体积（MB），超过后改用合并转发发送解析链接；小于等于 0 表示不限制",
+    "description": "视频大小上限",
     "type": "float",
-    "default": 100
+    "default": 100,
+    "hint": "直接发送视频的最大体积，单位 MB；小于等于 0 表示不限制。超过后改用合并转发发送解析链接。"
   },
   "allow_unknown_video_size": {
-    "description": "无法通过 HEAD/Range 获取视频大小时，是否仍然直接发送视频",
+    "description": "允许未知大小",
     "type": "bool",
-    "default": false
+    "default": false,
+    "hint": "无法通过 HEAD/Range 获取视频大小时，仍然直接发送视频。"
   },
   "size_check_timeout_seconds": {
-    "description": "视频大小检查请求超时时间（秒）",
+    "description": "大小检查超时",
     "type": "float",
-    "default": 10
+    "default": 10,
+    "hint": "视频大小检查请求超时时间，单位为秒。"
   },
   "enable_parse_reaction": {
-    "description": "解析成功后是否给原消息添加表情回应",
+    "description": "解析回应",
     "type": "bool",
-    "default": true
+    "default": true,
+    "hint": "解析成功后给原消息添加表情回应。"
   },
   "reaction_action": {
-    "description": "OneBot 表情回应动作名，不同协议端可能不同，默认使用 set_msg_emoji_like",
+    "description": "回应动作",
     "type": "string",
-    "default": "set_msg_emoji_like"
+    "default": "set_msg_emoji_like",
+    "hint": "OneBot 表情回应动作名，不同协议端可能不同。"
   },
   "reaction_emoji_id": {
-    "description": "解析成功时使用的表情 ID，默认 124",
+    "description": "回应表情 ID",
     "type": "string",
-    "default": "124"
+    "default": "124",
+    "hint": "解析成功时使用的表情 ID。"
   }
 }
