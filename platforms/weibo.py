@@ -1,7 +1,68 @@
+from __future__ import annotations
+
 import html
+import json
 import re
+from html.parser import HTMLParser
+from time import time
+from urllib.parse import urlparse
+from uuid import uuid4
+
+import httpx
+from httpx import Cookies
 
 from ..models import BaseParser, OrderedContent, ParseContext, ParseResult
+
+
+class _WeiboArticleParser(HTMLParser):
+    """按微博长文章中的可见顺序提取文本和图片。"""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.contents: list[OrderedContent] = []
+        self._text_parts: list[str] = []
+        self._ignored_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
+        if tag in {"script", "style", "noscript"}:
+            self._ignored_depth += 1
+            return
+        if self._ignored_depth:
+            return
+        if tag in {"p", "div", "li", "blockquote", "h1", "h2", "h3", "br"}:
+            self._flush_text()
+        if tag == "img":
+            self._flush_text()
+            attributes = dict(attrs)
+            image_url = WeiboParser._normalize_url(
+                attributes.get("data-src") or attributes.get("src")
+            )
+            if image_url:
+                self.contents.append(OrderedContent(kind="image", value=image_url))
+
+    def handle_endtag(self, tag: str):
+        if tag in {"script", "style", "noscript"}:
+            if self._ignored_depth:
+                self._ignored_depth -= 1
+            return
+        if self._ignored_depth:
+            return
+        if tag in {"p", "div", "li", "blockquote", "h1", "h2", "h3"}:
+            self._flush_text()
+
+    def handle_data(self, data: str):
+        if not self._ignored_depth and (text := data.strip()):
+            self._text_parts.append(text)
+
+    def close(self):
+        super().close()
+        self._flush_text()
+
+    def _flush_text(self):
+        text = " ".join(self._text_parts).strip()
+        self._text_parts.clear()
+        if text:
+            self.contents.append(OrderedContent(kind="text", value=text))
 
 
 class WeiboParser(BaseParser):
@@ -33,12 +94,205 @@ class WeiboParser(BaseParser):
         SHARE_PATTERN,
         *ARTICLE_PATTERNS,
     )
+    HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+            "Mobile/15E148 Safari/604.1"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/json,*/*",
+    }
 
     async def match(self, context: ParseContext) -> bool:
         return any(re.search(pattern, context.combined_text) for pattern in self.PATTERNS)
 
     async def parse(self, context: ParseContext) -> ParseResult:
-        return ParseResult(platform=self.name, error="微博网络解析尚未完成。")
+        text = context.combined_text
+        if match := re.search(self.TV_PATTERN, text):
+            return await self._parse_status_id(self._mid_to_bid(match.group("mid")))
+        if match := re.search(self.VIDEO_PATTERN, text):
+            return await self._parse_video_fid(match.group("fid"))
+        for pattern in self.ARTICLE_PATTERNS:
+            if match := re.search(pattern, text):
+                article_id = match.groupdict().get("article_query_id") or match.groupdict().get(
+                    "article_path_id"
+                )
+                return await self._parse_article(str(article_id))
+        if match := re.search(self.SHARE_PATTERN, text):
+            return await self._parse_share(match.group(0))
+        for pattern in self.STATUS_PATTERNS:
+            if match := re.search(pattern, text):
+                status_id = match.groupdict().get("desktop_id") or match.groupdict().get(
+                    "mobile_id"
+                )
+                return await self._parse_status_id(str(status_id))
+        return ParseResult(platform=self.name, error="未找到微博链接。")
+
+    def _timeout(self) -> float:
+        return float(self.config.get("request_timeout_seconds", 30))
+
+    def _cookies(self) -> Cookies:
+        cookies = Cookies()
+        for item in str(self.config.get("weibo_cookies", "")).split(";"):
+            if "=" not in item:
+                continue
+            key, value = item.strip().split("=", 1)
+            if not key:
+                continue
+            cookies.set(key, value, domain=".weibo.com", path="/")
+            cookies.set(key, value, domain=".weibo.cn", path="/")
+        return cookies
+
+    @classmethod
+    def _is_trusted_weibo_url(cls, url: str) -> bool:
+        host = (urlparse(url).hostname or "").lower()
+        return host in {"weibo.com", "weibo.cn"} or host.endswith(
+            (".weibo.com", ".weibo.cn")
+        )
+
+    async def _parse_status_id(self, status_id: str) -> ParseResult:
+        referer = f"https://m.weibo.cn/detail/{status_id}"
+        headers = {
+            **self.HEADERS,
+            "Accept": "application/json, text/plain, */*",
+            "Referer": referer,
+            "Origin": "https://m.weibo.cn",
+            "X-Requested-With": "XMLHttpRequest",
+            "MWeibo-Pwa": "1",
+        }
+        # 状态接口显式使用匿名会话，避免分享跳转携带登录 Cookie。
+        async with httpx.AsyncClient(
+            timeout=self._timeout(),
+            follow_redirects=False,
+            headers=headers,
+        ) as client:
+            response = await client.get(
+                "https://m.weibo.cn/statuses/show",
+                params={"id": status_id, "_": int(time() * 1000)},
+            )
+            if response.status_code in {403, 418}:
+                raise ValueError(f"微博接口被风控（{response.status_code}）")
+            response.raise_for_status()
+            payload = response.json()
+            data = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(data, dict):
+                raise ValueError("微博状态数据为空")
+            result = self._parse_status_payload(data)
+            return await self.materialize_images(result, client, referer)
+
+    async def _parse_share(self, url: str) -> ParseResult:
+        async with httpx.AsyncClient(
+            timeout=self._timeout(),
+            follow_redirects=True,
+            headers=self.HEADERS,
+            cookies=self._cookies(),
+        ) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+        final_url = str(response.url)
+        if final_url == url:
+            raise ValueError("微博分享链接未发生跳转")
+        if not self._is_trusted_weibo_url(final_url) or not any(
+            re.search(pattern, final_url) for pattern in self.PATTERNS
+        ):
+            raise ValueError("微博分享链接跳转到不可信域名")
+        return await self.parse(ParseContext(text=final_url))
+
+    async def _parse_article(self, article_id: str) -> ParseResult:
+        referer = f"https://card.weibo.com/article/m/show/id/{article_id}"
+        headers = {**self.HEADERS, "Referer": referer}
+        async with httpx.AsyncClient(
+            timeout=self._timeout(),
+            follow_redirects=False,
+            headers=headers,
+            cookies=self._cookies(),
+        ) as client:
+            response = await client.post(
+                "https://card.weibo.com/article/m/aj/detail",
+                data={"_rid": str(uuid4()), "id": article_id, "_t": int(time() * 1000)},
+            )
+            response.raise_for_status()
+            result = self._parse_article_payload(response.json())
+            return await self.materialize_images(result, client, referer)
+
+    @classmethod
+    def _parse_article_payload(cls, payload: object) -> ParseResult:
+        if not isinstance(payload, dict) or payload.get("msg") != "success":
+            raise ValueError("微博长文章请求失败")
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise ValueError("微博长文章数据为空")
+        user = data.get("userinfo")
+        if not isinstance(user, dict) or not user.get("screen_name"):
+            raise ValueError("微博长文章作者数据为空")
+        parser = _WeiboArticleParser()
+        parser.feed(str(data.get("content") or ""))
+        parser.close()
+        return ParseResult(
+            platform=cls.name,
+            title=str(data.get("title") or "微博长文章"),
+            author=str(user["screen_name"]),
+            ordered_contents=parser.contents,
+            extra_lines=[] if parser.contents else ["微博长文章正文为空。"],
+        )
+
+    async def _parse_video_fid(self, fid: str) -> ParseResult:
+        referer = f"https://h5.video.weibo.com/show/{fid}"
+        headers = {
+            **self.HEADERS,
+            "Referer": referer,
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        async with httpx.AsyncClient(
+            timeout=self._timeout(),
+            follow_redirects=False,
+            headers=headers,
+            cookies=self._cookies(),
+        ) as client:
+            response = await client.post(
+                f"https://h5.video.weibo.com/api/component?page=/show/{fid}",
+                content='data=' + json.dumps(
+                    {"Component_Play_Playinfo": {"oid": fid}},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+            response.raise_for_status()
+            result = self._parse_video_payload(response.json())
+            return await self.materialize_images(result, client, referer)
+
+    @classmethod
+    def _parse_video_payload(cls, payload: object) -> ParseResult:
+        data = payload.get("data") if isinstance(payload, dict) else None
+        component = data.get("Component_Play_Playinfo") if isinstance(data, dict) else None
+        if not isinstance(component, dict) or not component:
+            raise ValueError("微博视频数据为空")
+        reward = component.get("reward")
+        user = reward.get("user") if isinstance(reward, dict) else None
+        author = str(user.get("name") or "未知作者") if isinstance(user, dict) else "未知作者"
+        urls = component.get("urls")
+        video_url = ""
+        if isinstance(urls, dict):
+            video_url = next(
+                (
+                    normalized
+                    for value in urls.values()
+                    if (normalized := cls._normalize_url(value))
+                ),
+                "",
+            )
+        if not video_url:
+            video_url = cls._normalize_url(component.get("stream_url"))
+        cover_url = cls._normalize_url(component.get("cover_image"))
+        return ParseResult(
+            platform=cls.name,
+            title=str(component.get("title") or "微博视频"),
+            author=author,
+            description=cls._strip_html(component.get("text")),
+            cover_urls=[cover_url] if cover_url else [],
+            video_url=video_url,
+            extra_lines=[] if video_url else ["无法获取微博视频直链。"],
+        )
 
     @staticmethod
     def _base62_encode(number: int) -> str:
