@@ -2,8 +2,10 @@ import re
 from dataclasses import dataclass
 
 import httpx
+
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.message_components import Node, Nodes
 from astrbot.api.star import Context, Star
 
 from .models import BaseParser, ParseResult
@@ -34,7 +36,9 @@ class MultiParserPlugin(Star):
         }
 
     def _enabled_parsers(self) -> list[BaseParser]:
-        enabled = {str(item).lower() for item in self.config.get("enabled_platforms", [])}
+        enabled = {
+            str(item).lower() for item in self.config.get("enabled_platforms", [])
+        }
         return [parser for name, parser in self.parsers.items() if name in enabled]
 
     @staticmethod
@@ -70,7 +74,9 @@ class MultiParserPlugin(Star):
             return
 
         try:
-            await self._call_onebot(event, action, message_id=int(message_id), emoji_id=emoji_id)
+            await self._call_onebot(
+                event, action, message_id=int(message_id), emoji_id=emoji_id
+            )
         except Exception as exc:
             logger.info(f"解析成功表情回应失败: {exc}")
 
@@ -88,12 +94,19 @@ class MultiParserPlugin(Star):
         return int(match.group(1))
 
     async def _probe_video_size(self, url: str) -> VideoSizeInfo:
-        timeout = float(self.config.get("size_check_timeout_seconds", self.config.get("request_timeout_seconds", 30)))
+        timeout = float(
+            self.config.get(
+                "size_check_timeout_seconds",
+                self.config.get("request_timeout_seconds", 30),
+            )
+        )
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "*/*",
         }
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+        async with httpx.AsyncClient(
+            timeout=timeout, follow_redirects=True, headers=headers
+        ) as client:
             try:
                 response = await client.head(url)
                 length = response.headers.get("Content-Length")
@@ -103,21 +116,26 @@ class MultiParserPlugin(Star):
                 logger.info(f"HEAD 检查视频大小失败，尝试 Range 请求: {exc}")
 
             try:
-                response = await client.get(url, headers={"Range": "bytes=0-0"})
-                content_range = response.headers.get("Content-Range", "")
-                size = self._parse_content_range(content_range)
-                if size is not None:
-                    return VideoSizeInfo(size_bytes=size)
-                length = response.headers.get("Content-Length")
-                if length and length.isdigit() and int(length) <= 1:
-                    return VideoSizeInfo(reason="服务端未返回完整文件大小")
+                async with client.stream(
+                    "GET", url, headers={"Range": "bytes=0-0"}
+                ) as response:
+                    content_range = response.headers.get("Content-Range", "")
+                    size = self._parse_content_range(content_range)
+                    if size is not None:
+                        return VideoSizeInfo(size_bytes=size)
+                    length = response.headers.get("Content-Length")
+                    if length and length.isdigit():
+                        length_bytes = int(length)
+                        if length_bytes > 1:
+                            return VideoSizeInfo(size_bytes=length_bytes)
+                        return VideoSizeInfo(reason="服务端未返回完整文件大小")
             except Exception as exc:
                 return VideoSizeInfo(reason=f"视频大小检查失败: {exc}")
 
         return VideoSizeInfo(reason="服务端未返回视频大小")
 
     def _video_send_decision(self, size_info: VideoSizeInfo) -> tuple[bool, str]:
-        max_size_mb = float(self.config.get("max_video_size_mb", 100))
+        max_size_mb = float(self.config.get("max_video_size_mb", 50))
         if max_size_mb <= 0:
             return True, "未启用大小限制"
 
@@ -135,13 +153,17 @@ class MultiParserPlugin(Star):
 
         return True, f"视频大小 {self._format_size(size_info.size_mb)}，未超过限制"
 
-    async def _send_forward_links(self, event: AstrMessageEvent, result: ParseResult, reason: str) -> None:
+    async def _send_forward_links(
+        self, event: AstrMessageEvent, result: ParseResult, reason: str
+    ) -> None:
         sender_id = str(event.get_sender_id() or "0")
         sender_name = sender_id
         raw = self._raw(event) or {}
         raw_sender = raw.get("sender") or {}
         if isinstance(raw_sender, dict):
-            sender_name = raw_sender.get("card") or raw_sender.get("nickname") or sender_name
+            sender_name = (
+                raw_sender.get("card") or raw_sender.get("nickname") or sender_name
+            )
 
         title = result.title or "未命名内容"
         summary_lines = [
@@ -159,7 +181,9 @@ class MultiParserPlugin(Star):
                 "data": {
                     "name": sender_name,
                     "uin": sender_id,
-                    "content": [{"type": "text", "data": {"text": "\n".join(summary_lines)}}],
+                    "content": [
+                        {"type": "text", "data": {"text": "\n".join(summary_lines)}}
+                    ],
                 },
             },
             {
@@ -167,18 +191,27 @@ class MultiParserPlugin(Star):
                 "data": {
                     "name": sender_name,
                     "uin": sender_id,
-                    "content": [{"type": "text", "data": {"text": f"视频直链:\n{result.video_url}"}}],
+                    "content": [
+                        {
+                            "type": "text",
+                            "data": {"text": f"视频直链:\n{result.video_url}"},
+                        }
+                    ],
                 },
             },
         ]
 
         group_id = raw.get("group_id")
         if group_id:
-            await self._call_onebot(event, "send_group_forward_msg", group_id=int(group_id), messages=nodes)
+            await self._call_onebot(
+                event, "send_group_forward_msg", group_id=int(group_id), messages=nodes
+            )
             return
 
         user_id = raw.get("user_id") or sender_id
-        await self._call_onebot(event, "send_private_forward_msg", user_id=int(user_id), messages=nodes)
+        await self._call_onebot(
+            event, "send_private_forward_msg", user_id=int(user_id), messages=nodes
+        )
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def handle_parse(self, event: AstrMessageEvent):
@@ -193,9 +226,59 @@ class MultiParserPlugin(Star):
                 await self._react_success(event)
                 result = await parser.parse(context)
                 send_video_by_url = bool(self.config.get("send_video_by_url", True))
-                info_chain = result.info_chain(include_video_url=not send_video_by_url)
-                if info_chain:
-                    yield event.chain_result(info_chain)
+                include_video_url = not send_video_by_url
+                supports_forward_nodes = False
+                if result.image_count >= 3:
+                    try:
+                        platform_name = event.get_platform_name()
+                    except Exception:
+                        platform_name = ""
+                    supports_forward_nodes = platform_name in {
+                        "aiocqhttp",
+                        "satori",
+                    }
+                if result.image_count >= 3 and supports_forward_nodes:
+                    summary_chain = result.info_chain(
+                        include_content=False,
+                        include_video_url=include_video_url,
+                    )
+                    if summary_chain:
+                        yield event.chain_result(summary_chain)
+
+                    content_chain = result.info_chain(
+                        include_summary=False,
+                        include_video_url=include_video_url,
+                    )
+                    if content_chain:
+                        sender_id = str(event.get_sender_id() or "0")
+                        try:
+                            public_sender_name = event.get_sender_name()
+                        except Exception:
+                            public_sender_name = ""
+                        sender_name = (
+                            str(public_sender_name) if public_sender_name else sender_id
+                        )
+                        raw = self._raw(event) or {}
+                        raw_sender = (
+                            raw.get("sender") or {} if isinstance(raw, dict) else {}
+                        )
+                        if isinstance(raw_sender, dict) and raw_sender.get("card"):
+                            sender_name = str(raw_sender["card"])
+                        nodes = [
+                            Node(
+                                content=[component],
+                                name=sender_name,
+                                uin=sender_id,
+                            )
+                            for component in content_chain
+                        ]
+                        yield event.chain_result([Nodes(nodes)])
+                else:
+                    info_chain = result.info_chain(
+                        include_video_url=include_video_url
+                    )
+                    if info_chain:
+                        yield event.chain_result(info_chain)
                 if send_video_by_url and result.video_url:
                     size_info = await self._probe_video_size(result.video_url)
                     should_send_video, reason = self._video_send_decision(size_info)
@@ -206,13 +289,19 @@ class MultiParserPlugin(Star):
                             await self._send_forward_links(event, result, reason)
                         except Exception as exc:
                             logger.warning(f"合并转发解析链接失败: {exc}")
-                            yield event.plain_result(f"{reason}\n合并转发发送失败: {exc}\n视频链接: {result.video_url}")
+                            yield event.plain_result(
+                                f"{reason}\n合并转发发送失败: {exc}\n视频链接: {result.video_url}"
+                            )
                 elif result.video_url:
                     try:
-                        await self._send_forward_links(event, result, "已按配置不直接发送视频")
+                        await self._send_forward_links(
+                            event, result, "已按配置不直接发送视频"
+                        )
                     except Exception as exc:
                         logger.warning(f"合并转发解析链接失败: {exc}")
-                        yield event.plain_result(f"合并转发发送失败: {exc}\n视频链接: {result.video_url}")
+                        yield event.plain_result(
+                            f"合并转发发送失败: {exc}\n视频链接: {result.video_url}"
+                        )
                 return
             except Exception as exc:
                 logger.warning(f"{parser.name} 解析失败: {exc}")

@@ -5,15 +5,17 @@
     "default": ["bilibili", "douyin", "redbook"],
     "hint": "可选 bilibili、douyin、redbook。"
   },
-  "douyin_api_url": {
-    "description": "抖音 API",
-    "type": "string",
-    "default": "http://api.xingzhige.cn/API/douyin/"
+  "douyin_cookies": {
+    "description": "抖音 Cookies",
+    "type": "text",
+    "default": "",
+    "hint": "选填。未提供 ttwid 时，插件会尝试注册匿名会话。"
   },
-  "redbook_api_url": {
-    "description": "小红书 API",
-    "type": "string",
-    "default": "http://127.0.0.1:6666/xhs/detail"
+  "redbook_cookies": {
+    "description": "小红书 Cookies",
+    "type": "text",
+    "default": "",
+    "hint": "选填。部分内容配置 Cookies 后更容易获得可用或无水印资源。"
   },
   "request_timeout_seconds": {
     "description": "请求超时",
@@ -30,7 +32,7 @@
   "max_video_size_mb": {
     "description": "视频大小上限",
     "type": "float",
-    "default": 100,
+    "default": 50,
     "hint": "直接发送视频的最大体积，单位 MB；小于等于 0 表示不限制。超过后改用合并转发发送解析链接。"
   },
   "allow_unknown_video_size": {

@@ -1,24 +1,152 @@
 import re
+from html.parser import HTMLParser
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-from ..models import BaseParser, ParseContext, ParseResult
+from ..models import BaseParser, OrderedContent, ParseContext, ParseResult
 from ..utils import replace_links
+
+
+def _original_image_url(url: str) -> str:
+    """Return the original URL for a Bilibili-hosted image.
+
+    Args:
+        url: Image URL, including protocol-relative URLs.
+
+    Returns:
+        An absolute URL with Bilibili transform suffixes removed. URLs hosted
+        outside ``hdslb.com`` are returned unchanged.
+    """
+    normalized_url = f"https:{url}" if url.startswith("//") else url
+    try:
+        parsed_url = urlsplit(normalized_url)
+        hostname = parsed_url.hostname or ""
+        _ = parsed_url.port  # Trigger urllib's lazy port validation.
+    except ValueError:
+        return url
+    if hostname == "hdslb.com" or hostname.endswith(".hdslb.com"):
+        transform_pattern = r"@(?:\d+w(?:_[^/]*)?|!web-[^/]+)(?:\.[^/]*)?$"
+        path = re.sub(transform_pattern, "", parsed_url.path, count=1)
+        return urlunsplit(parsed_url._replace(path=path))
+    return normalized_url
+
+
+class _ArticleHTMLParser(HTMLParser):
+    """Extract visible article text and images in document order."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.title = ""
+        self.author = ""
+        self.contents: list[OrderedContent] = []
+        self._article_depth = 0
+        self._text_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
+        attributes = dict(attrs)
+        if tag == "meta":
+            if attributes.get("property") == "og:title":
+                self.title = str(attributes.get("content") or "")
+            elif attributes.get("name") == "author":
+                self.author = str(attributes.get("content") or "")
+
+        classes = str(attributes.get("class") or "").split()
+        if (
+            not self._article_depth
+            and tag == "div"
+            and {
+                "article-holder",
+                "article-content",
+            }.intersection(classes)
+        ):
+            self._article_depth = 1
+            return
+        if not self._article_depth:
+            return
+        if tag == "div":
+            self._article_depth += 1
+        if tag in {"p", "h1", "h2", "h3", "li", "blockquote", "br"}:
+            self._flush_text()
+        if tag == "img":
+            self._flush_text()
+            image_url = str(attributes.get("data-src") or attributes.get("src") or "")
+            image_url = _original_image_url(image_url)
+            if image_url.startswith(("http://", "https://")):
+                self.contents.append(OrderedContent(kind="image", value=image_url))
+
+    def handle_endtag(self, tag: str):
+        if not self._article_depth:
+            return
+        if tag in {"p", "h1", "h2", "h3", "li", "blockquote", "figure"}:
+            self._flush_text()
+        if tag == "div":
+            self._article_depth -= 1
+            if not self._article_depth:
+                self._flush_text()
+
+    def handle_data(self, data: str):
+        if self._article_depth and (text := data.strip()):
+            self._text_parts.append(text)
+
+    def _flush_text(self):
+        text = "".join(self._text_parts).strip()
+        self._text_parts.clear()
+        if text:
+            self.contents.append(OrderedContent(kind="text", value=text))
 
 
 class BilibiliParser(BaseParser):
     name = "bilibili"
+    image_host_suffixes = ("hdslb.com",)
     SHORT_PATTERN = r"https?://(?:bili2233\.cn|b23\.tv)/[a-zA-Z0-9]+"
     ID_PATTERN = r"(BV[0-9A-Za-z]{10}|av\d+)"
+    DYNAMIC_PATTERN = (
+        r"https?://(?:t\.bilibili\.com/|www\.bilibili\.com/dynamic/)"
+        r"(?P<dynamic_id>\d+)"
+    )
+    OPUS_PATTERN = r"https?://www\.bilibili\.com/opus/(?P<opus_id>\d+)"
+    ARTICLE_PATTERN = r"https?://www\.bilibili\.com/read/cv(?P<article_id>\d+)"
+    DYNAMIC_API = "https://api.bilibili.com/x/polymer/web-dynamic/v1/detail"
+    OPUS_API = "https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/detail"
 
     async def match(self, context: ParseContext) -> bool:
         text = context.combined_text
-        return bool(re.search(self.ID_PATTERN, text) or re.search(self.SHORT_PATTERN, text))
+        return any(
+            re.search(pattern, text)
+            for pattern in (
+                self.DYNAMIC_PATTERN,
+                self.OPUS_PATTERN,
+                self.ARTICLE_PATTERN,
+                self.ID_PATTERN,
+                self.SHORT_PATTERN,
+            )
+        )
 
     async def parse(self, context: ParseContext) -> ParseResult:
         text = context.combined_text
+        if match := re.search(self.DYNAMIC_PATTERN, text):
+            return await self._parse_dynamic(match.group("dynamic_id"))
+        if match := re.search(self.OPUS_PATTERN, text):
+            return await self._parse_opus(match.group("opus_id"))
+        if match := re.search(self.ARTICLE_PATTERN, text):
+            return await self._parse_article(match.group("article_id"))
+
         match = re.search(self.ID_PATTERN, text)
-        video_id = match.group(0) if match else await self._extract_id_from_short_url(text)
+        if not match and (short_match := re.search(self.SHORT_PATTERN, text)):
+            headers = self._headers("https://www.bilibili.com")
+            async with httpx.AsyncClient(
+                timeout=int(self.config.get("request_timeout_seconds", 30)),
+                follow_redirects=True,
+            ) as client:
+                response = await client.get(short_match.group(0), headers=headers)
+                response.raise_for_status()
+            final_url = str(response.url)
+            if final_url == short_match.group(0):
+                return ParseResult(platform=self.name, error="B站短链未发生跳转。")
+            return await self.parse(ParseContext(text=final_url))
+
+        video_id = match.group(0) if match else ""
         if not video_id:
             return ParseResult(platform=self.name, error="未找到 B站 视频 ID。")
 
@@ -29,42 +157,221 @@ class BilibiliParser(BaseParser):
         play_url = await self._get_play_url(str(info["cid"]), video_id)
         extra_lines = [] if play_url else ["无法获取视频直链。"]
 
-        return ParseResult(
+        result = ParseResult(
             platform=self.name,
             title=info.get("title", "未知标题"),
             author=info.get("author", "未知作者"),
             description=replace_links(info.get("desc", "")),
-            cover_urls=[info.get("pic", "")],
+            cover_urls=[_original_image_url(str(info.get("pic", "")))],
             video_url=play_url,
             extra_lines=extra_lines,
         )
+        referer = "https://www.bilibili.com"
+        async with httpx.AsyncClient(
+            timeout=int(self.config.get("request_timeout_seconds", 30)),
+            headers=self._headers(referer),
+        ) as client:
+            return await self.materialize_images(result, client, referer)
 
-    async def _extract_id_from_short_url(self, text: str) -> str:
-        match = re.search(self.SHORT_PATTERN, text)
-        if not match:
-            return ""
-        headers = self._headers("https://www.bilibili.com")
-        async with httpx.AsyncClient(timeout=int(self.config.get("request_timeout_seconds", 30))) as client:
-            response = await client.get(match.group(0), headers=headers, follow_redirects=True)
-        final_url = str(response.url)
-        id_match = re.search(self.ID_PATTERN, final_url)
-        return id_match.group(0) if id_match else ""
+    async def _parse_dynamic(self, dynamic_id: str) -> ParseResult:
+        referer = "https://www.bilibili.com"
+        async with httpx.AsyncClient(
+            timeout=int(self.config.get("request_timeout_seconds", 30)),
+            headers=self._headers(referer),
+        ) as client:
+            response = await client.get(
+                self.DYNAMIC_API,
+                params={"id": dynamic_id},
+            )
+            response.raise_for_status()
+            result = self._parse_dynamic_payload(response.json())
+            return await self.materialize_images(result, client, referer)
+
+    def _parse_dynamic_payload(self, payload: dict) -> ParseResult:
+        """Convert a Bilibili dynamic payload into an ordered result.
+
+        Args:
+            payload: Decoded dynamic detail response.
+
+        Returns:
+            Parsed dynamic metadata and ordered content.
+
+        Raises:
+            ValueError: If the response does not contain a dynamic item.
+        """
+        if payload.get("code") not in (None, 0):
+            raise ValueError(str(payload.get("message") or "B站动态请求失败"))
+        item = payload.get("data", {}).get("item", {})
+        modules = item.get("modules", {})
+        if not modules:
+            raise ValueError("B站动态数据为空")
+        author = str(modules.get("module_author", {}).get("name") or "未知作者")
+        dynamic = modules.get("module_dynamic", {})
+        description = str(dynamic.get("desc", {}).get("text") or "").strip()
+        major = dynamic.get("major") or {}
+        major_type = major.get("type", "")
+        title = "B站动态"
+        image_urls: list[str] = []
+        if major_type == "MAJOR_TYPE_OPUS":
+            opus = major.get("opus") or {}
+            title = str(opus.get("title") or title)
+            image_urls = [
+                _original_image_url(str(pic.get("url")))
+                for pic in opus.get("pics", [])
+                if pic.get("url")
+            ]
+        elif major_type == "MAJOR_TYPE_ARCHIVE":
+            archive = major.get("archive") or {}
+            title = str(archive.get("title") or title)
+            description = description or str(archive.get("desc") or "").strip()
+            if cover := archive.get("cover"):
+                image_urls.append(_original_image_url(str(cover)))
+
+        ordered_contents = []
+        if description:
+            ordered_contents.append(OrderedContent(kind="text", value=description))
+        ordered_contents.extend(
+            OrderedContent(kind="image", value=url) for url in image_urls
+        )
+        return ParseResult(
+            platform=self.name,
+            title=title,
+            author=author,
+            ordered_contents=ordered_contents,
+        )
+
+    async def _parse_opus(self, opus_id: str) -> ParseResult:
+        referer = f"https://www.bilibili.com/opus/{opus_id}"
+        async with httpx.AsyncClient(
+            timeout=int(self.config.get("request_timeout_seconds", 30)),
+            headers=self._headers(referer),
+        ) as client:
+            response = await client.get(
+                self.OPUS_API,
+                params={"opus_id": opus_id},
+            )
+            response.raise_for_status()
+            result = self._parse_opus_payload(response.json())
+            return await self.materialize_images(result, client, referer)
+
+    def _parse_opus_payload(self, payload: dict) -> ParseResult:
+        """Convert a Bilibili Opus payload into an ordered result.
+
+        Args:
+            payload: Decoded Opus detail response.
+
+        Returns:
+            Parsed Opus metadata and ordered content.
+
+        Raises:
+            ValueError: If the response does not contain an Opus item.
+        """
+        if payload.get("code") not in (None, 0):
+            raise ValueError(str(payload.get("message") or "B站图文请求失败"))
+        item = payload.get("data", {}).get("item", {})
+        if not item:
+            raise ValueError("B站图文数据为空")
+        title = str(item.get("basic", {}).get("title") or "B站图文")
+        author = "未知作者"
+        ordered_contents: list[OrderedContent] = []
+        for module in item.get("modules", []):
+            if module.get("module_author"):
+                author = str(module["module_author"].get("name") or author)
+            content = module.get("module_content") or {}
+            for paragraph in content.get("paragraphs", []):
+                text_parts = []
+                for node in paragraph.get("text", {}).get("nodes", []):
+                    if node.get("type") == "TEXT_NODE_TYPE_WORD":
+                        text_parts.append(str(node.get("word", {}).get("words") or ""))
+                    elif node.get("type") == "TEXT_NODE_TYPE_RICH":
+                        rich = node.get("rich") or {}
+                        text_parts.append(
+                            str(rich.get("text") or rich.get("orig_text") or "")
+                        )
+                if text := "".join(text_parts).strip():
+                    ordered_contents.append(OrderedContent(kind="text", value=text))
+                for pic in paragraph.get("pic", {}).get("pics", []):
+                    if image_url := pic.get("url"):
+                        ordered_contents.append(
+                            OrderedContent(
+                                kind="image",
+                                value=_original_image_url(str(image_url)),
+                            )
+                        )
+        return ParseResult(
+            platform=self.name,
+            title=title,
+            author=author,
+            ordered_contents=ordered_contents,
+        )
+
+    async def _parse_article(self, article_id: str) -> ParseResult:
+        url = f"https://www.bilibili.com/read/cv{article_id}"
+        async with httpx.AsyncClient(
+            timeout=int(self.config.get("request_timeout_seconds", 30)),
+            follow_redirects=True,
+            headers=self._headers(url),
+        ) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            if match := re.search(self.OPUS_PATTERN, str(response.url)):
+                return await self._parse_opus(match.group("opus_id"))
+            result = self._parse_article_html(response.text)
+            return await self.materialize_images(result, client, url)
+
+    def _parse_article_html(self, html: str) -> ParseResult:
+        """Extract public article HTML without executing page scripts.
+
+        Args:
+            html: Bilibili article page HTML.
+
+        Returns:
+            Parsed title, author, and ordered article content.
+
+        Raises:
+            ValueError: If the public article body is unavailable.
+        """
+        parser = _ArticleHTMLParser()
+        parser.feed(html)
+        parser.close()
+        if not parser.contents:
+            raise ValueError("B站专栏正文不可访问")
+        return ParseResult(
+            platform=self.name,
+            title=parser.title or "B站专栏",
+            author=parser.author or "未知作者",
+            ordered_contents=parser.contents,
+        )
 
     @staticmethod
     def _id_type(video_id: str) -> str:
-        return "bvid" if video_id.startswith("BV") else "aid" if video_id.startswith("av") else "unknown"
+        return (
+            "bvid"
+            if video_id.startswith("BV")
+            else "aid"
+            if video_id.startswith("av")
+            else "unknown"
+        )
 
     async def _get_video_info(self, video_id: str) -> dict:
         id_type = self._id_type(video_id)
         if id_type == "bvid":
             api_url = f"https://api.bilibili.com/x/web-interface/view?bvid={video_id}"
         elif id_type == "aid":
-            api_url = f"https://api.bilibili.com/x/web-interface/view?aid={video_id[2:]}"
+            api_url = (
+                f"https://api.bilibili.com/x/web-interface/view?aid={video_id[2:]}"
+            )
         else:
             return {"error": "未知ID类型"}
 
-        async with httpx.AsyncClient(timeout=int(self.config.get("request_timeout_seconds", 30))) as client:
-            data = (await client.get(api_url, headers=self._headers("https://www.bilibili.com"))).json()
+        async with httpx.AsyncClient(
+            timeout=int(self.config.get("request_timeout_seconds", 30))
+        ) as client:
+            data = (
+                await client.get(
+                    api_url, headers=self._headers("https://www.bilibili.com")
+                )
+            ).json()
         if data.get("code") != 0:
             return {"error": f"获取视频信息失败: {data.get('message')}"}
 
@@ -86,9 +393,19 @@ class BilibiliParser(BaseParser):
         else:
             return ""
 
-        async with httpx.AsyncClient(timeout=int(self.config.get("request_timeout_seconds", 30))) as client:
-            data = (await client.get(api_url, headers=self._headers("https://www.bilibili.com"))).json()
-        return data.get("data", {}).get("durl", [{}])[0].get("url", "") if data.get("code") == 0 else ""
+        async with httpx.AsyncClient(
+            timeout=int(self.config.get("request_timeout_seconds", 30))
+        ) as client:
+            data = (
+                await client.get(
+                    api_url, headers=self._headers("https://www.bilibili.com")
+                )
+            ).json()
+        return (
+            data.get("data", {}).get("durl", [{}])[0].get("url", "")
+            if data.get("code") == 0
+            else ""
+        )
 
     @staticmethod
     def _headers(referer: str) -> dict:

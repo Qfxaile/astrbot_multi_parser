@@ -26,10 +26,18 @@ def extract_context(event: AstrMessageEvent) -> ParseContext:
             data = getattr(segment, "data", {})
 
         if segment_type == "text":
-            text = data.get("text", "") if isinstance(data, dict) else getattr(data, "text", "")
+            text = (
+                data.get("text", "")
+                if isinstance(data, dict)
+                else getattr(data, "text", "")
+            )
             text_parts.append(str(text))
         elif segment_type == "json":
-            json_data = data.get("data", "") if isinstance(data, dict) else getattr(data, "data", "")
+            json_data = (
+                data.get("data", "")
+                if isinstance(data, dict)
+                else getattr(data, "data", "")
+            )
             url, preview = extract_json_url_and_preview(str(json_data))
             if url:
                 json_urls.append(url)
@@ -48,10 +56,9 @@ def extract_json_url_and_preview(data: str) -> tuple[str, str]:
         payload = json.loads(data)
     except json.JSONDecodeError:
         return "", ""
-    url = (
-        payload.get("meta", {}).get("detail_1", {}).get("qqdocurl", "")
-        or payload.get("meta", {}).get("news", {}).get("jumpUrl", "")
-    )
+    url = payload.get("meta", {}).get("detail_1", {}).get(
+        "qqdocurl", ""
+    ) or payload.get("meta", {}).get("news", {}).get("jumpUrl", "")
     preview = payload.get("meta", {}).get("news", {}).get("preview", "")
     return str(url or ""), str(preview or "")
 
