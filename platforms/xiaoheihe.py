@@ -117,8 +117,14 @@ class XiaoheiheParser(BaseParser):
                     "share_link_id"
                 )
                 return await self._parse_post_by_id(str(link_id))
-        if any(re.search(pattern, text) for pattern in (self.GAME_WEB_PATTERN, self.GAME_SHARE_PATTERN)):
-            return ParseResult(platform=self.name, error="小黑盒游戏解析尚未完成。")
+        if match := re.search(self.GAME_WEB_PATTERN, text):
+            return await self._parse_game_by_appid(
+                match.group("appid"), match.group("game_type")
+            )
+        if match := re.search(self.GAME_SHARE_PATTERN, text):
+            return await self._parse_game_by_appid(
+                match.group("share_appid"), match.group("share_game_type")
+            )
         return ParseResult(platform=self.name, error="未找到小黑盒链接。")
 
     def _timeout(self) -> float:
@@ -291,6 +297,404 @@ class XiaoheiheParser(BaseParser):
         return url.split("?", 1)[0].replace(
             "imgheybox1.max-c.com", "imgheybox.max-c.com"
         )
+
+    @staticmethod
+    def _canonical_game_web_url(appid: str, game_type: str) -> str:
+        normalized_type = game_type.strip().lower() or "pc"
+        return f"https://www.xiaoheihe.cn/app/topic/game/{normalized_type}/{appid}"
+
+    async def _parse_game_by_appid(
+        self, appid: str, game_type: str
+    ) -> ParseResult:
+        appid = appid.strip()
+        if not appid:
+            raise ValueError("无效的小黑盒游戏 appid")
+        web_url = self._canonical_game_web_url(appid, game_type)
+        async with httpx.AsyncClient(
+            timeout=self._timeout(),
+            follow_redirects=True,
+            headers=self.HEADERS,
+        ) as client:
+            response = await client.get(
+                web_url,
+                headers={"Accept": "text/html,application/xhtml+xml,*/*"},
+            )
+            response.raise_for_status()
+            html_text = response.text
+            game = self._extract_game_root(html_text, appid)
+            steam_appid = self._pick_steam_appid(game, appid)
+            intro: dict = {}
+            if steam_appid is not None:
+                intro_response = await client.get(
+                    "https://api.xiaoheihe.cn/game/game_introduction/",
+                    params={"steam_appid": steam_appid, "return_json": 1},
+                )
+                intro_response.raise_for_status()
+                intro_payload = intro_response.json()
+                if (
+                    isinstance(intro_payload, dict)
+                    and intro_payload.get("status") == "ok"
+                    and isinstance(intro_payload.get("result"), dict)
+                ):
+                    intro = intro_payload["result"]
+            result = self._build_game_result(
+                html_text, game, appid, game_type, intro
+            )
+            return await self.materialize_images(result, client, web_url)
+
+    def _parse_game_state(
+        self,
+        html_text: str,
+        appid: str,
+        game_type: str,
+        intro: dict,
+    ) -> ParseResult:
+        game = self._extract_game_root(html_text, appid)
+        return self._build_game_result(html_text, game, appid, game_type, intro)
+
+    def _build_game_result(
+        self,
+        html_text: str,
+        game: dict,
+        appid: str,
+        game_type: str,
+        intro: dict,
+    ) -> ParseResult:
+        image_urls = self._extract_game_images(game, html_text)
+        video_urls = self._extract_game_videos(game, html_text)
+        extra_lines = [f"游戏平台: {game_type.upper()}"]
+        extra_lines.extend(f"附加视频: {url}" for url in video_urls[1:])
+        if not image_urls and not video_urls:
+            extra_lines.append("未找到可发送的媒体。")
+        return ParseResult(
+            platform=self.name,
+            title=self._build_game_title(game),
+            description=self._build_game_desc(html_text, game, intro),
+            image_urls=image_urls,
+            video_url=video_urls[0] if video_urls else "",
+            extra_lines=extra_lines,
+        )
+
+    def _extract_game_root(self, html_text: str, appid: str) -> dict:
+        payload = self._extract_nuxt_data_payload(html_text)
+        if not payload:
+            raise ValueError("小黑盒游戏页未找到 __NUXT_DATA__")
+        root = self._devalue_resolve_root(payload)
+        game = self._find_best_game_dict(root, appid)
+        if not game:
+            raise ValueError("小黑盒游戏页未找到游戏详情数据")
+        return game
+
+    @staticmethod
+    def _extract_nuxt_data_payload(html_text: str) -> list | None:
+        matched = re.search(
+            r'<script[^>]+id=["\']__NUXT_DATA__["\'][^>]*>(.*?)</script>',
+            html_text,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if not matched:
+            return None
+        try:
+            payload = json.loads(matched.group(1).strip())
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, list) else None
+
+    @staticmethod
+    def _devalue_resolve_root(payload: list):
+        total = len(payload)
+        memo: dict[int, object] = {}
+        resolving: set[int] = set()
+
+        def resolve(value):
+            if (
+                isinstance(value, int)
+                and not isinstance(value, bool)
+                and 0 <= value < total
+            ):
+                return resolve_index(value)
+            if isinstance(value, list):
+                if (
+                    len(value) == 2
+                    and isinstance(value[0], str)
+                    and value[0]
+                    in {
+                        "ShallowReactive",
+                        "Reactive",
+                        "Ref",
+                        "ShallowRef",
+                        "Readonly",
+                        "ShallowReadonly",
+                    }
+                ):
+                    return resolve(value[1])
+                return [resolve(item) for item in value]
+            if isinstance(value, dict):
+                return {key: resolve(item) for key, item in value.items()}
+            return value
+
+        def resolve_index(index: int):
+            if index in memo:
+                return memo[index]
+            if index in resolving:
+                return None
+            resolving.add(index)
+            memo[index] = None
+            memo[index] = resolve(payload[index])
+            resolving.remove(index)
+            return memo[index]
+
+        return resolve_index(0) if payload else None
+
+    @staticmethod
+    def _find_best_game_dict(root, appid: str) -> dict | None:
+        best = None
+        best_score = -1
+        stack = [root]
+        seen: set[int] = set()
+        while stack:
+            current = stack.pop()
+            if isinstance(current, (dict, list)):
+                marker = id(current)
+                if marker in seen:
+                    continue
+                seen.add(marker)
+            if isinstance(current, dict):
+                score = sum(
+                    3
+                    for key in (
+                        "about_the_game",
+                        "name",
+                        "name_en",
+                        "price",
+                        "heybox_price",
+                        "score",
+                        "comment_stats",
+                        "screenshots",
+                        "share_url",
+                        "video_url",
+                    )
+                    if key in current
+                )
+                if str(current.get("appid") or "") == appid or str(
+                    current.get("steam_appid") or ""
+                ) == appid:
+                    score += 50
+                if appid and appid in str(current.get("share_url") or ""):
+                    score += 20
+                if score >= 12 and score > best_score:
+                    best = current
+                    best_score = score
+                stack.extend(
+                    value
+                    for value in current.values()
+                    if isinstance(value, (dict, list))
+                )
+            elif isinstance(current, list):
+                stack.extend(
+                    value for value in current if isinstance(value, (dict, list))
+                )
+        return best
+
+    @staticmethod
+    def _pick_steam_appid(game: dict, fallback_appid: str) -> int | None:
+        try:
+            return int(str(game.get("steam_appid") or fallback_appid).strip())
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _build_game_title(game: dict) -> str:
+        name = str(game.get("name") or "").strip()
+        english_name = str(game.get("name_en") or "").strip()
+        if name and english_name:
+            return f"{name}（{english_name}）"
+        return name or english_name or "小黑盒游戏详情"
+
+    def _build_game_desc(self, html_text: str, game: dict, intro: dict) -> str:
+        lines = []
+        intro_text = self._format_game_intro_text(
+            str(intro.get("about_the_game") or game.get("about_the_game") or "")
+        )
+        if intro_text:
+            lines.append(intro_text)
+        if game_types := self._parse_game_types_from_html(html_text):
+            lines.append(f"类型：{game_types}")
+        score = str(game.get("score") or "").strip()
+        stats = game.get("comment_stats")
+        score_count = stats.get("score_comment") if isinstance(stats, dict) else None
+        if score:
+            if isinstance(score_count, int) and score_count > 0:
+                lines.append(
+                    f"小黑盒评分：{score}（{self._format_people_count(score_count)}）"
+                )
+            else:
+                lines.append(f"小黑盒评分：{score}")
+        release_date = str(intro.get("release_date") or "").strip()
+        if release_date:
+            lines.append(f"发布时间：{release_date.replace('-', '.')}" )
+        if developer := self._extract_company_text(intro.get("developers")):
+            lines.append(f"开发商：{developer}")
+        if publisher := self._extract_company_text(intro.get("publishers")):
+            lines.append(f"发行商：{publisher}")
+        price = game.get("price")
+        if isinstance(price, dict):
+            initial = str(price.get("initial") or price.get("current") or "").strip()
+            if initial:
+                lines.append(f"价格：¥ {initial.replace('¥', '').strip()}")
+            lowest = str(price.get("lowest_price") or "").strip()
+            if lowest:
+                lines.append(f"史低价格：¥ {lowest.replace('¥', '').strip()}")
+        heybox_price = game.get("heybox_price")
+        if isinstance(heybox_price, dict):
+            if yuan := self._format_yuan_from_coin(heybox_price.get("cost_coin")):
+                lines.append(f"当前价格：¥ {yuan}")
+        return "\n\n".join(lines)
+
+    def _parse_game_types_from_html(self, html_text: str) -> str:
+        matched = re.search(
+            r'<div class="row-2">.*?<div class="tags">(.*?)</div></div>',
+            html_text,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if not matched:
+            return ""
+        tags_html = matched.group(1)
+        common = re.search(
+            r'<div class="tag common"[^>]*>(.*?)</div>',
+            tags_html,
+            re.DOTALL | re.IGNORECASE,
+        )
+        groups = []
+        if common:
+            values = [
+                self._strip_tags(value)
+                for value in re.findall(
+                    r"<span[^>]*>(.*?)</span>",
+                    common.group(1),
+                    re.DOTALL | re.IGNORECASE,
+                )
+            ]
+            values = [value for value in values if value]
+            if values:
+                groups.append(f"[ {' '.join(values)} ]")
+        values = [
+            self._strip_tags(value)
+            for value in re.findall(
+                r'<p class="tag"[^>]*>(.*?)</p>',
+                tags_html,
+                re.DOTALL | re.IGNORECASE,
+            )
+        ]
+        values = [value for value in values if value]
+        if values:
+            groups.append(f"[ {' '.join(values)} ]")
+        return " ".join(groups)
+
+    @classmethod
+    def _format_game_intro_text(cls, text: str) -> str:
+        if not text:
+            return ""
+        value = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+        value = re.sub(r"<[^>]+>", "", value)
+        return cls._clean_text(value)
+
+    @classmethod
+    def _strip_tags(cls, text: str) -> str:
+        return cls._clean_text(re.sub(r"<[^>]+>", "", html.unescape(text)))
+
+    @staticmethod
+    def _extract_company_text(items) -> str:
+        if not isinstance(items, list):
+            return ""
+        return ",".join(
+            str(item["value"])
+            for item in items
+            if isinstance(item, dict) and item.get("value")
+        )
+
+    @staticmethod
+    def _format_people_count(count: int) -> str:
+        if count >= 10000:
+            return f"{count / 10000:.1f} 万人评价"
+        return f"{count} 人评价"
+
+    @staticmethod
+    def _format_yuan_from_coin(coin) -> str:
+        try:
+            value = int(coin) / 1000
+        except (TypeError, ValueError):
+            return ""
+        if value.is_integer():
+            return str(int(value))
+        return f"{value:.2f}"
+
+    def _extract_game_images(self, game: dict, html_text: str) -> list[str]:
+        images = []
+        seen = set()
+
+        def add(candidate):
+            image_url = self._normalize_image_url(candidate)
+            if not image_url:
+                return
+            image_key = self._image_dedup_key(image_url)
+            if image_key in seen:
+                return
+            lowered = image_url.lower()
+            if not any(
+                marker in lowered
+                for marker in ("gameimg", "steam_item_assets", "screenshot")
+            ):
+                return
+            seen.add(image_key)
+            images.append(image_url)
+
+        for key in (
+            "screenshots",
+            "screenshot_list",
+            "screen_shots",
+            "images",
+            "image_list",
+            "game_imgs",
+        ):
+            values = game.get(key)
+            if not isinstance(values, list):
+                continue
+            for item in values:
+                if isinstance(item, dict):
+                    for field in ("url", "image", "img", "src"):
+                        add(item.get(field))
+                else:
+                    add(item)
+        for field in ("header_img", "cover", "cover_img", "poster", "share_img"):
+            add(game.get(field))
+        if not images:
+            for candidate in re.findall(
+                r'https?://[^"\'\s<>]+\.(?:jpg|jpeg|png|webp)(?:\?[^"\'\s<>]*)?',
+                html_text,
+                re.IGNORECASE,
+            ):
+                add(candidate)
+        return images
+
+    def _extract_game_videos(self, game: dict, html_text: str) -> list[str]:
+        videos = []
+        seen = set()
+
+        def add(candidate):
+            video_url = self._normalize_media_url(candidate)
+            if video_url and video_url not in seen:
+                seen.add(video_url)
+                videos.append(video_url)
+
+        add(game.get("video_url"))
+        for candidate in re.findall(
+            r'https?://[^"\'\s<>]+\.(?:m3u8|mp4|mov)(?:\?[^"\'\s<>]*)?',
+            html_text,
+            re.IGNORECASE,
+        ):
+            add(candidate)
+        return videos
 
     def _sign_path(self, path: str) -> dict[str, str | int]:
         now = int(time.time())

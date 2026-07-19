@@ -196,3 +196,108 @@ async def test_parse_post_reports_api_error_without_token_leak(monkeypatch):
         )
 
     assert "Bsecret" not in str(exc_info.value)
+
+
+GAME_HTML = """
+<html>
+  <div class="row-2"><div class="tags">
+    <div class="tag common"><span>射击</span><span>多人</span></div>
+    <p class="tag">合作</p>
+  </div></div>
+  <script id="__NUXT_DATA__" type="application/json">
+  [{"game":1},{"appid":"730","steam_appid":"730","name":"反恐精英","name_en":"Counter-Strike 2","score":"9.2","comment_stats":{"score_comment":12345},"screenshots":[{"url":"https://gameimg.max-c.com/screenshot.jpg"}],"video_url":"https://video.max-c.com/game.mp4","video_thumb":"https://gameimg.max-c.com/thumb.jpg"}]
+  </script>
+</html>
+"""
+
+
+def test_nuxt_state_resolves_game_and_extracts_metadata():
+    parser = XiaoheiheParser({})
+
+    result = parser._parse_game_state(
+        GAME_HTML,
+        "730",
+        "pc",
+        {
+            "about_the_game": "一款合作游戏",
+            "release_date": "2020-01-02",
+            "developers": [{"value": "开发商"}],
+            "publishers": [{"value": "发行商"}],
+        },
+    )
+
+    assert result.title == "反恐精英（Counter-Strike 2）"
+    assert result.description.startswith("一款合作游戏")
+    assert "类型：[ 射击 多人 ] [ 合作 ]" in result.description
+    assert "小黑盒评分：9.2（1.2 万人评价）" in result.description
+    assert result.image_urls == ["https://gameimg.max-c.com/screenshot.jpg"]
+    assert result.video_url == "https://video.max-c.com/game.mp4"
+
+
+def test_nuxt_state_rejects_missing_game():
+    with pytest.raises(ValueError, match="未找到游戏详情数据"):
+        XiaoheiheParser({})._parse_game_state(
+            '<script id="__NUXT_DATA__">[{"not_game":1},{"name":"其他"}]</script>',
+            "730",
+            "pc",
+            {},
+        )
+
+
+def test_game_helpers_deduplicate_images_and_format_prices():
+    parser = XiaoheiheParser({})
+    game = {
+        "appid": "730",
+        "name": "游戏",
+        "screenshots": [
+            {"url": "https://gameimg.max-c.com/a.jpg?x=1"},
+            {"url": "https://gameimg.max-c.com/a.jpg?x=2"},
+        ],
+        "price": {"initial": "¥ 100", "lowest_price": "80"},
+        "heybox_price": {"cost_coin": 1250},
+    }
+
+    assert parser._extract_game_images(game, "") == [
+        "https://gameimg.max-c.com/a.jpg?x=1"
+    ]
+    assert parser._format_yuan_from_coin(1250) == "1.25"
+    assert "价格：¥ 100" in parser._build_game_desc("", game, {})
+    assert "史低价格：¥ 80" in parser._build_game_desc("", game, {})
+    assert "当前价格：¥ 1.25" in parser._build_game_desc("", game, {})
+
+
+@pytest.mark.asyncio
+async def test_parse_game_page_merges_intro_and_materializes_images(monkeypatch):
+    image_bytes = b"game-image"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "www.xiaoheihe.cn":
+            return httpx.Response(200, text=GAME_HTML, request=request)
+        if request.url.host == "api.xiaoheihe.cn":
+            assert request.url.path == "/game/game_introduction/"
+            assert request.url.params["steam_appid"] == "730"
+            return httpx.Response(
+                200,
+                json={
+                    "status": "ok",
+                    "result": {
+                        "about_the_game": "一款合作游戏",
+                        "release_date": "2020-01-02",
+                        "developers": [{"value": "开发商"}],
+                        "publishers": [{"value": "发行商"}],
+                    },
+                },
+                request=request,
+            )
+        assert request.url.host == "gameimg.max-c.com"
+        return httpx.Response(200, content=image_bytes, request=request)
+
+    install_mock_client(monkeypatch, handler)
+    result = await XiaoheiheParser({}).parse(
+        ParseContext(text="https://www.xiaoheihe.cn/app/topic/game/pc/730")
+    )
+
+    assert result.title == "反恐精英（Counter-Strike 2）"
+    assert "开发商：开发商" in result.description
+    assert result.image_urls[0].startswith("base64://")
+    assert result.video_url == "https://video.max-c.com/game.mp4"
