@@ -9,20 +9,19 @@ from ..utils import replace_links
 
 
 def _original_image_url(url: str) -> str:
-    """Return the original URL for a Bilibili-hosted image.
+    """返回哔哩哔哩托管图片的原图 URL。
 
-    Args:
-        url: Image URL, including protocol-relative URLs.
+    参数:
+        url: 图片 URL，可以是省略协议的相对协议 URL。
 
-    Returns:
-        An absolute URL with Bilibili transform suffixes removed. URLs hosted
-        outside ``hdslb.com`` are returned unchanged.
+    返回:
+        移除哔哩哔哩转换后缀后的绝对 URL；非 ``hdslb.com`` 托管的 URL 原样返回。
     """
     normalized_url = f"https:{url}" if url.startswith("//") else url
     try:
         parsed_url = urlsplit(normalized_url)
         hostname = parsed_url.hostname or ""
-        _ = parsed_url.port  # Trigger urllib's lazy port validation.
+        _ = parsed_url.port  # 触发 urllib 对端口的延迟校验。
     except ValueError:
         return url
     if hostname == "hdslb.com" or hostname.endswith(".hdslb.com"):
@@ -33,7 +32,7 @@ def _original_image_url(url: str) -> str:
 
 
 class _ArticleHTMLParser(HTMLParser):
-    """Extract visible article text and images in document order."""
+    """按文档顺序提取专栏中可见的文本和图片。"""
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -140,7 +139,6 @@ class BilibiliParser(BaseParser):
                 follow_redirects=True,
             ) as client:
                 response = await client.get(short_match.group(0), headers=headers)
-                response.raise_for_status()
             final_url = str(response.url)
             if final_url == short_match.group(0):
                 return ParseResult(platform=self.name, error="B站短链未发生跳转。")
@@ -188,16 +186,16 @@ class BilibiliParser(BaseParser):
             return await self.materialize_images(result, client, referer)
 
     def _parse_dynamic_payload(self, payload: dict) -> ParseResult:
-        """Convert a Bilibili dynamic payload into an ordered result.
+        """将哔哩哔哩动态载荷转换为有序解析结果。
 
-        Args:
-            payload: Decoded dynamic detail response.
+        参数:
+            payload: 解码后的动态详情响应。
 
-        Returns:
-            Parsed dynamic metadata and ordered content.
+        返回:
+            解析后的动态元数据和有序内容。
 
-        Raises:
-            ValueError: If the response does not contain a dynamic item.
+        异常:
+            ValueError: 响应中不包含动态条目时抛出。
         """
         if payload.get("code") not in (None, 0):
             raise ValueError(str(payload.get("message") or "B站动态请求失败"))
@@ -212,6 +210,7 @@ class BilibiliParser(BaseParser):
         major_type = major.get("type", "")
         title = "B站动态"
         image_urls: list[str] = []
+        # 动态主内容可能是图文或视频稿件，两类载荷的标题和图片字段不同。
         if major_type == "MAJOR_TYPE_OPUS":
             opus = major.get("opus") or {}
             title = str(opus.get("title") or title)
@@ -255,16 +254,16 @@ class BilibiliParser(BaseParser):
             return await self.materialize_images(result, client, referer)
 
     def _parse_opus_payload(self, payload: dict) -> ParseResult:
-        """Convert a Bilibili Opus payload into an ordered result.
+        """将哔哩哔哩图文载荷转换为有序解析结果。
 
-        Args:
-            payload: Decoded Opus detail response.
+        参数:
+            payload: 解码后的图文详情响应。
 
-        Returns:
-            Parsed Opus metadata and ordered content.
+        返回:
+            解析后的图文元数据和有序内容。
 
-        Raises:
-            ValueError: If the response does not contain an Opus item.
+        异常:
+            ValueError: 响应中不包含图文条目时抛出。
         """
         if payload.get("code") not in (None, 0):
             raise ValueError(str(payload.get("message") or "B站图文请求失败"))
@@ -274,6 +273,7 @@ class BilibiliParser(BaseParser):
         title = str(item.get("basic", {}).get("title") or "B站图文")
         author = "未知作者"
         ordered_contents: list[OrderedContent] = []
+        # 按模块和段落原始顺序追加文本、图片，确保最终消息保持页面图文顺序。
         for module in item.get("modules", []):
             if module.get("module_author"):
                 author = str(module["module_author"].get("name") or author)
@@ -320,16 +320,16 @@ class BilibiliParser(BaseParser):
             return await self.materialize_images(result, client, url)
 
     def _parse_article_html(self, html: str) -> ParseResult:
-        """Extract public article HTML without executing page scripts.
+        """在不执行页面脚本的情况下提取公开专栏 HTML。
 
-        Args:
-            html: Bilibili article page HTML.
+        参数:
+            html: 哔哩哔哩专栏页面 HTML。
 
-        Returns:
-            Parsed title, author, and ordered article content.
+        返回:
+            解析后的标题、作者和有序正文内容。
 
-        Raises:
-            ValueError: If the public article body is unavailable.
+        异常:
+            ValueError: 无法获取公开专栏正文时抛出。
         """
         parser = _ArticleHTMLParser()
         parser.feed(html)

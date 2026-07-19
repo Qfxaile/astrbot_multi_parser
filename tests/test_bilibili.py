@@ -7,6 +7,58 @@ from astrbot_multi_parser.models import ParseContext, ParseResult
 from astrbot_multi_parser.platforms import bilibili
 
 
+@pytest.mark.asyncio
+async def test_short_video_url_extracts_id_when_redirect_target_returns_412(
+    monkeypatch,
+):
+    parser = bilibili.BilibiliParser({})
+    short_url = "https://b23.tv/dBRgvHl"
+    shared_url = (
+        "https://www.bilibili.com/video/BV1VpK56jERg"
+        "?buvid=test&share_source=QQ&spmid=united.player-video-detail.0.0"
+    )
+    requested_urls = []
+    parsed_video_ids = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if str(request.url) == short_url:
+            return httpx.Response(
+                302,
+                headers={"Location": shared_url},
+                request=request,
+            )
+        return httpx.Response(412, request=request)
+
+    async_client = httpx.AsyncClient
+
+    def create_client(**kwargs):
+        return async_client(transport=httpx.MockTransport(handler), **kwargs)
+
+    async def get_video_info(video_id):
+        parsed_video_ids.append(video_id)
+        return {
+            "title": "视频标题",
+            "author": "视频作者",
+            "desc": "",
+            "cid": "1",
+            "pic": "",
+        }
+
+    async def get_play_url(cid, video_id):
+        return ""
+
+    monkeypatch.setattr(bilibili.httpx, "AsyncClient", create_client)
+    monkeypatch.setattr(parser, "_get_video_info", get_video_info)
+    monkeypatch.setattr(parser, "_get_play_url", get_play_url)
+
+    result = await parser.parse(ParseContext(text=short_url))
+
+    assert result.title == "视频标题"
+    assert parsed_video_ids == ["BV1VpK56jERg"]
+    assert requested_urls == [short_url, shared_url]
+
+
 @pytest.mark.parametrize(
     ("url", "expected"),
     [

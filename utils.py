@@ -7,6 +7,7 @@ from .models import ParseContext
 
 
 def extract_context(event: AstrMessageEvent) -> ParseContext:
+    # 不同 AstrBot 适配器可能把原始消息表示为字典或对象，这里统一取出消息段列表。
     raw = getattr(event.message_obj, "raw_message", None)
     if isinstance(raw, dict):
         raw_message = raw.get("message", [])
@@ -17,6 +18,7 @@ def extract_context(event: AstrMessageEvent) -> ParseContext:
     json_urls: list[str] = []
     json_previews: list[str] = []
 
+    # 同时收集普通文本和 JSON 分享卡片中的链接，供各平台解析器统一匹配。
     for segment in raw_message:
         if isinstance(segment, dict):
             segment_type = segment.get("type")

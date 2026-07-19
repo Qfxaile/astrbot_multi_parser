@@ -107,6 +107,7 @@ class MultiParserPlugin(Star):
         async with httpx.AsyncClient(
             timeout=timeout, follow_redirects=True, headers=headers
         ) as client:
+            # 优先使用 HEAD 获取大小，避免为探测文件长度下载视频正文。
             try:
                 response = await client.head(url)
                 length = response.headers.get("Content-Length")
@@ -115,6 +116,7 @@ class MultiParserPlugin(Star):
             except Exception as exc:
                 logger.info(f"HEAD 检查视频大小失败，尝试 Range 请求: {exc}")
 
+            # 部分服务器不支持 HEAD，退回单字节 Range 请求并读取完整文件大小。
             try:
                 async with client.stream(
                     "GET", url, headers={"Range": "bytes=0-0"}
@@ -219,6 +221,7 @@ class MultiParserPlugin(Star):
         if not context.combined_text:
             return
 
+        # 解析器按配置顺序尝试匹配；命中后即完成处理，避免同一链接被重复解析。
         for parser in self._enabled_parsers():
             try:
                 if not await parser.match(context):
@@ -237,6 +240,7 @@ class MultiParserPlugin(Star):
                         "aiocqhttp",
                         "satori",
                     }
+                # 多图内容在支持节点消息的平台上使用合并转发，以保留图文顺序并减少刷屏。
                 if result.image_count >= 3 and supports_forward_nodes:
                     summary_chain = result.info_chain(
                         include_content=False,
@@ -264,14 +268,23 @@ class MultiParserPlugin(Star):
                         )
                         if isinstance(raw_sender, dict) and raw_sender.get("card"):
                             sender_name = str(raw_sender["card"])
-                        nodes = [
+                        nodes = []
+                        if summary_chain:
+                            nodes.append(
+                                Node(
+                                    content=summary_chain,
+                                    name=sender_name,
+                                    uin=sender_id,
+                                )
+                            )
+                        nodes.extend(
                             Node(
                                 content=[component],
                                 name=sender_name,
                                 uin=sender_id,
                             )
                             for component in content_chain
-                        ]
+                        )
                         yield event.chain_result([Nodes(nodes)])
                 else:
                     info_chain = result.info_chain(
@@ -279,6 +292,7 @@ class MultiParserPlugin(Star):
                     )
                     if info_chain:
                         yield event.chain_result(info_chain)
+                # 视频直发前先检查大小；超限或无法确认大小时按配置转发解析链接。
                 if send_video_by_url and result.video_url:
                     size_info = await self._probe_video_size(result.video_url)
                     should_send_video, reason = self._video_send_decision(size_info)

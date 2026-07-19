@@ -53,6 +53,9 @@ class RedBookParser(BaseParser):
         ) as client:
             url = match.group(0)
             if (urlparse(url).hostname or "") == "xhslink.com":
+                parsed_short_url = urlsplit(url)
+                if parsed_short_url.scheme == "http":
+                    url = urlunsplit(parsed_short_url._replace(scheme="https"))
                 response = await client.get(url)
                 response.raise_for_status()
                 url = str(response.url)
@@ -70,6 +73,7 @@ class RedBookParser(BaseParser):
                 f"https://www.xiaohongshu.com/discovery/item/{note_id}{query}"
             )
 
+            # Explore 页面为首选数据源，访问失败或状态缺失时回退到 Discovery 页面。
             try:
                 response = await client.get(explore_url)
                 response.raise_for_status()
@@ -112,17 +116,17 @@ class RedBookParser(BaseParser):
         return json.loads(matched.group(1).strip().replace("undefined", "null"))
 
     def _parse_explore_state(self, state: dict, note_id: str) -> ParseResult:
-        """Convert Xiaohongshu Explore state into a normalized result.
+        """将小红书 Explore 页面状态转换为统一解析结果。
 
-        Args:
-            state: Decoded `window.__INITIAL_STATE__` object.
-            note_id: Note identifier used as the map key.
+        参数:
+            state: 解码后的 ``window.__INITIAL_STATE__`` 对象。
+            note_id: 用作映射键的笔记标识。
 
-        Returns:
-            Parsed note metadata and media URLs.
+        返回:
+            解析后的笔记元数据和媒体 URL。
 
-        Raises:
-            ValueError: If the note is absent from the page state.
+        异常:
+            ValueError: 页面状态中不存在目标笔记时抛出。
         """
         note_root = state.get("note") if isinstance(state, dict) else None
         note_map = note_root.get("noteDetailMap") if isinstance(note_root, dict) else None
@@ -161,16 +165,16 @@ class RedBookParser(BaseParser):
         )
 
     def _parse_discovery_state(self, state: dict) -> ParseResult:
-        """Convert Xiaohongshu Discovery state into a normalized result.
+        """将小红书 Discovery 页面状态转换为统一解析结果。
 
-        Args:
-            state: Decoded `window.__INITIAL_STATE__` object.
+        参数:
+            state: 解码后的 ``window.__INITIAL_STATE__`` 对象。
 
-        Returns:
-            Parsed note metadata and media URLs.
+        返回:
+            解析后的笔记元数据和媒体 URL。
 
-        Raises:
-            ValueError: If the fallback note data is absent.
+        异常:
+            ValueError: 回退页面中不存在笔记数据时抛出。
         """
         note_data = state.get("noteData") if isinstance(state, dict) else None
         if not isinstance(note_data, dict):
@@ -226,14 +230,13 @@ class RedBookParser(BaseParser):
 
     @staticmethod
     def _select_video_url(video: object) -> str:
-        """Select the preferred video stream from type-checked external data.
+        """从经过类型检查的外部数据中选择首选视频流。
 
-        Args:
-            video: External video metadata that may contain malformed containers.
+        参数:
+            video: 可能包含异常容器的外部视频元数据。
 
-        Returns:
-            The first non-empty master URL in codec priority order, or an empty
-            string when no valid variant is available.
+        返回:
+            按编码优先级找到的第一个非空主 URL；没有有效变体时返回空字符串。
         """
         if not isinstance(video, dict):
             return ""
@@ -243,6 +246,7 @@ class RedBookParser(BaseParser):
         stream = media.get("stream")
         if not isinstance(stream, dict):
             return ""
+        # 优先选择兼顾清晰度与常见客户端支持的视频编码。
         for codec in ("h265", "h264", "av1", "h266"):
             variants = stream.get(codec) or []
             if not isinstance(variants, list):
@@ -260,19 +264,19 @@ class RedBookParser(BaseParser):
         image: object,
         fallback_fields: tuple[str, ...],
     ) -> str:
-        """Select the first safe original image candidate in priority order.
+        """按优先级选择第一个安全的原图候选地址。
 
-        Args:
-            image: External image metadata that may contain malformed values.
-            fallback_fields: Ordered URL fields checked after file and trace IDs.
+        参数:
+            image: 可能包含异常值的外部图片元数据。
+            fallback_fields: 在文件标识和链路标识之后依次检查的 URL 字段。
 
-        Returns:
-            A fixed-CDN ID URL, the first safe fallback URL, a locally rejected
-            failure candidate when all supplied URLs are unsafe, or an empty string
-            when no string candidate exists.
+        返回:
+            由固定 CDN 和图片标识组成的 URL、首个安全回退 URL、所有候选均不安全时
+            可供本地拒绝的失败候选，或没有字符串候选时的空字符串。
         """
         if not isinstance(image, dict):
             return ""
+        # 图片标识只作为路径并进行转义，网络位置部分固定为可信的小红书 CDN。
         for field_name in ("fileId", "traceId"):
             image_id = image.get(field_name)
             if isinstance(image_id, str) and image_id:
@@ -281,6 +285,7 @@ class RedBookParser(BaseParser):
                     ("https", "sns-img-qc.xhscdn.com", path, "", "")
                 )
 
+        # 回退 URL 不改写网络位置部分；无效值保留为失败槽位，由统一下载流程生成提示。
         failure_candidate = ""
         for field_name in fallback_fields:
             candidate = image.get(field_name)
@@ -306,15 +311,14 @@ class RedBookParser(BaseParser):
 
     @staticmethod
     def _strip_image_transform(url: str) -> str:
-        """Normalize a safe image URL without rewriting its authority.
+        """在不改写网络位置部分的情况下规范化安全图片 URL。
 
-        Args:
-            url: Image URL whose path may end in a ``!<transform>`` suffix.
+        参数:
+            url: 路径末尾可能包含 ``!<transform>`` 转换后缀的图片 URL。
 
-        Returns:
-            URL with only the transform suffix removed, the original malformed
-            value when httpx can reject it locally, or an invalid sentinel for
-            unsafe schemes, credentials, hosts, and ports.
+        返回:
+            仅移除转换后缀的 URL；可由 httpx 在本地拒绝的异常值保持原样；协议、凭据、
+            主机或端口不安全时返回无效标记。
         """
         try:
             parsed = urlsplit(url)

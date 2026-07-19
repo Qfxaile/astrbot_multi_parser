@@ -20,6 +20,51 @@ async def test_matches_supported_redbook_urls(url):
     assert await redbook.RedBookParser({}).match(ParseContext(text=url))
 
 
+@pytest.mark.asyncio
+async def test_parse_upgrades_http_xhslink_to_https(monkeypatch):
+    short_url = "http://xhslink.com/o/8ReowhzV8oo"
+    page_url = "https://www.xiaohongshu.com/explore/note123"
+    state = {
+        "note": {
+            "noteDetailMap": {
+                "note123": {
+                    "note": {
+                        "type": "normal",
+                        "title": "图文标题",
+                        "imageList": [],
+                    }
+                }
+            }
+        }
+    }
+    short_link_requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "xhslink.com":
+            short_link_requests.append(str(request.url))
+            if request.url.scheme != "https":
+                return httpx.Response(400, request=request)
+            return httpx.Response(
+                302, headers={"Location": page_url}, request=request
+            )
+        html = f"<script>window.__INITIAL_STATE__={json.dumps(state)}</script>"
+        return httpx.Response(200, text=html, request=request)
+
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        redbook.httpx,
+        "AsyncClient",
+        lambda **kwargs: real_async_client(
+            transport=httpx.MockTransport(handler), **kwargs
+        ),
+    )
+
+    result = await redbook.RedBookParser({}).parse(ParseContext(text=short_url))
+
+    assert result.title == "图文标题"
+    assert short_link_requests == ["https://xhslink.com/o/8ReowhzV8oo"]
+
+
 def test_explore_prefers_h265_video():
     state = {
         "note": {

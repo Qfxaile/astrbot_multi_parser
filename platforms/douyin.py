@@ -135,20 +135,21 @@ class DouyinParser(BaseParser):
         return json.loads(matched.group(1).strip())
 
     def _parse_router_data(self, data: dict) -> ParseResult:
-        """Convert Douyin router data into a normalized result.
+        """将抖音路由数据转换为统一解析结果。
 
-        Args:
-            data: Decoded `window._ROUTER_DATA` object.
+        参数:
+            data: 解码后的 ``window._ROUTER_DATA`` 对象。
 
-        Returns:
-            Parsed metadata and media candidates.
+        返回:
+            解析后的元数据和媒体候选地址。
 
-        Raises:
-            ValueError: If no video or note page is present.
+        异常:
+            ValueError: 数据中不存在视频或图文页面时抛出。
         """
         loader_data = data.get("loaderData", {}) if isinstance(data, dict) else {}
         if not isinstance(loader_data, dict):
             loader_data = {}
+        # loaderData 的键包含页面类型和路由，兼容视频页与图文页两种入口。
         page = next(
             (
                 value
@@ -184,6 +185,7 @@ class DouyinParser(BaseParser):
             image_url = self._select_image_url(image)
             if image_url:
                 image_urls.append(image_url)
+        # 图文作品存在图片时直接返回；没有图片时再按视频结构提取播放信息。
         if image_urls:
             return ParseResult(
                 platform=self.name,
@@ -255,18 +257,19 @@ class DouyinParser(BaseParser):
 
     @classmethod
     def _select_image_url(cls, image: object) -> str:
-        """Select and validate an image candidate without iterating bad containers.
+        """在不遍历异常容器的前提下选择并校验图片候选地址。
 
-        Args:
-            image: External image object containing download or display URL lists.
+        参数:
+            image: 包含下载或展示 URL 列表的外部图片对象。
 
-        Returns:
-            The first non-empty candidate, an invalid sentinel for unsafe URLs, or
-            an empty string when the object has no string candidate.
+        返回:
+            第一个非空候选地址；遇到不安全 URL 时返回无效标记；对象中没有字符串候选时
+            返回空字符串。
         """
         if not isinstance(image, dict):
             return ""
         failure_candidate = ""
+        # 优先使用下载地址；每个外部容器和候选值都先校验类型与 URL 安全属性。
         for field_name in ("download_url_list", "url_list"):
             candidates = image.get(field_name)
             if not isinstance(candidates, list):

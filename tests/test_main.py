@@ -99,7 +99,7 @@ async def test_two_images_keep_legacy_info_chain_order(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_exactly_three_images_send_summary_then_single_component_nodes(
+async def test_exactly_three_images_repeat_summary_as_first_forward_node(
     monkeypatch,
 ):
     result = ParseResult(
@@ -117,9 +117,11 @@ async def test_exactly_three_images_send_summary_then_single_component_nodes(
     assert len(messages[1]) == 1
     assert isinstance(messages[1][0], Nodes)
     nodes = messages[1][0].nodes
-    assert len(nodes) == 3
+    assert len(nodes) == 4
     assert all(isinstance(node, Node) and len(node.content) == 1 for node in nodes)
-    assert all(isinstance(node.content[0], Image) for node in nodes)
+    assert isinstance(nodes[0].content[0], Plain)
+    assert nodes[0].content[0].text == messages[0][0].text == "标题"
+    assert all(isinstance(node.content[0], Image) for node in nodes[1:])
 
 
 @pytest.mark.asyncio
@@ -174,6 +176,7 @@ async def test_ordered_text_success_failure_success_preserves_component_order(
     nodes = messages[1][0].nodes
     assert [type(node.content[0]) for node in nodes] == [
         Plain,
+        Plain,
         Image,
         Plain,
         Image,
@@ -184,6 +187,7 @@ async def test_ordered_text_success_failure_success_preserves_component_order(
         for node in nodes
         for component in node.content
     ] == [
+        "摘要",
         "正文一",
         "base64://1",
         "第 2 张图片获取失败",
@@ -346,9 +350,11 @@ async def test_video_url_is_only_in_summary_when_direct_send_is_disabled(
 
     assert len(messages) == 2
     assert "视频链接: https://example.com/video.mp4" in messages[0][0].text
+    nodes = messages[1][0].nodes
+    assert "视频链接: https://example.com/video.mp4" in nodes[0].content[0].text
     assert all(
         "视频链接" not in node.content[0].text
-        for node in messages[1][0].nodes
+        for node in nodes[1:]
         if isinstance(node.content[0], Plain)
     )
     assert len(forwarded) == 1

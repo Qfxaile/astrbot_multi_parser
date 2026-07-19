@@ -58,20 +58,18 @@ class ParseResult:
         include_summary: bool = True,
         include_content: bool = True,
     ) -> list:
-        """Build message components for the parse result.
+        """为解析结果构建消息组件。
 
-        When ordered content exists, it takes priority over legacy cover and image
-        URL lists. Legacy image errors use the index of the corresponding empty
-        slot in the combined ``cover_urls + image_urls`` sequence.
+        存在有序内容时，优先使用有序内容而不是旧版封面和图片 URL 列表。
+        旧版图片错误使用其在 ``cover_urls + image_urls`` 合并序列中对应空槽位的索引。
 
-        Args:
-            include_video_url: Whether to include the video URL in the summary.
-            include_summary: Whether to include title, author, description, extra
-                lines, errors, and the optional video URL.
-            include_content: Whether to include ordered content or legacy media.
+        参数:
+            include_video_url: 是否在摘要中包含视频 URL。
+            include_summary: 是否包含标题、作者、简介、附加文本、错误信息和可选视频 URL。
+            include_content: 是否包含有序内容或旧版媒体内容。
 
-        Returns:
-            Message components in their required rendering order.
+        返回:
+            按所需渲染顺序排列的消息组件。
         """
         summary_chain: list = []
         lines = []
@@ -91,6 +89,7 @@ class ParseResult:
             if lines:
                 summary_chain.append(Plain("\n".join(lines)))
 
+        # 有序内容用于图文混排，必须保持解析器生成的文本与图片先后关系。
         if self.ordered_contents:
             content_chain: list = []
             if include_content:
@@ -103,6 +102,7 @@ class ParseResult:
                         content_chain.append(Plain(item.value))
             return [*summary_chain, *content_chain]
 
+        # 兼容旧版解析器：图片在前、摘要在后，失败槽位替换为对应错误文本。
         content_chain: list = []
         if include_content:
             for index, image_url in enumerate([*self.cover_urls, *self.image_urls]):
@@ -135,31 +135,29 @@ class BaseParser:
         client: httpx.AsyncClient,
         referer: str,
     ) -> ParseResult:
-        """Download image URLs into their original base64-encoded bytes.
+        """下载图片 URL，并将原始字节编码为 base64 数据。
 
-        Ordered content takes priority over legacy cover and image URL lists. An
-        image URL must use HTTP(S), omit userinfo, use a default HTTP(S) port,
-        and match the parser's trusted host suffixes. Hostnames are checked
-        structurally without DNS resolution; private addresses and unsafe
-        redirects are rejected. Redirects are followed manually for at most
-        five hops, revalidating every Location before requesting it. An invalid
-        URL is converted to the same failed image slot as other HTTP failures,
-        with a sanitized ``unknown`` hostname when it cannot be parsed.
+        有序内容优先于旧版封面和图片 URL 列表。图片 URL 必须使用 HTTP(S)、
+        不包含用户信息、使用默认 HTTP(S) 端口，并匹配解析器配置的可信域名后缀。
+        主机名只进行结构校验而不执行 DNS 解析；私有地址和不安全重定向会被拒绝。
+        重定向最多手动跟随五次，每次请求前都会重新校验 Location。无效 URL
+        与其他 HTTP 失败一样转换为图片失败槽位；无法解析主机名时使用
+        已脱敏的 ``unknown`` 标识。
 
-        Args:
-            result: Parse result containing legacy or ordered image slots.
-            client: Active HTTP client whose session headers and cookies are reused.
-            referer: Referer header sent with every image download.
+        参数:
+            result: 包含旧版或有序图片槽位的解析结果。
+            client: 当前 HTTP 客户端，复用其会话请求头和 Cookie。
+            referer: 每次下载图片时发送的 Referer 请求头。
 
-        Returns:
-            The same parse result with image slots materialized in place.
+        返回:
+            原解析结果对象，其中图片槽位已原地转换为实际数据。
 
-        Raises:
-            Exception: Any exception other than ``httpx.HTTPError`` and
-                ``httpx.InvalidURL`` raised while requesting or processing an
-                image is propagated unchanged.
+        异常:
+            Exception: 请求或处理图片时，除 ``httpx.HTTPError`` 和
+                ``httpx.InvalidURL`` 之外的异常会原样向上传播。
         """
         image_number = 0
+        # 新版解析器使用有序内容，图片下载失败时直接在原位置写入错误文本。
         if result.ordered_contents:
             for item in result.ordered_contents:
                 if item.kind not in {"image", "image_error"}:
@@ -176,6 +174,7 @@ class BaseParser:
                     for redirect_count in range(6):
                         hostname = "unknown"
                         try:
+                            # 每一次重定向都重新执行完整校验，防止可信地址跳转到内网或非可信域名。
                             parsed_url = urlparse(current_url)
                             hostname = parsed_url.hostname
                             if (
@@ -218,6 +217,7 @@ class BaseParser:
                             follow_redirects=False,
                         )
                         if 300 <= response.status_code < 400:
+                            # 禁用客户端自动重定向，确保新的 Location 先经过安全校验。
                             location = response.headers.get("Location")
                             if redirect_count >= 5 or not location:
                                 raise httpx.InvalidURL("too many image redirects")
@@ -238,6 +238,7 @@ class BaseParser:
                     logger.warning(f"图片下载失败 ({hostname}): {detail}")
             return result
 
+        # 旧版解析器分别保存封面和图片，使用合并索引记录下载失败的槽位。
         legacy_index = 0
         for field_name in ("cover_urls", "image_urls"):
             image_values = getattr(result, field_name)
@@ -252,6 +253,7 @@ class BaseParser:
                     for redirect_count in range(6):
                         hostname = "unknown"
                         try:
+                            # 旧版字段与有序内容遵循相同的 URL 和重定向安全边界。
                             parsed_url = urlparse(current_url)
                             hostname = parsed_url.hostname
                             if (
