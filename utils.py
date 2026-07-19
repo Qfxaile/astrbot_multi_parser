@@ -8,18 +8,29 @@ from .models import ParseContext
 
 def extract_context(event: AstrMessageEvent) -> ParseContext:
     raw = getattr(event.message_obj, "raw_message", None)
-    raw_message = getattr(raw, "message", []) or raw.get("message", []) if raw else []
+    if isinstance(raw, dict):
+        raw_message = raw.get("message", [])
+    else:
+        raw_message = getattr(raw, "message", []) if raw else []
+
     text_parts = [event.message_str]
     json_urls: list[str] = []
     json_previews: list[str] = []
 
     for segment in raw_message:
-        segment_type = segment.get("type")
-        data = segment.get("data", {})
+        if isinstance(segment, dict):
+            segment_type = segment.get("type")
+            data = segment.get("data", {})
+        else:
+            segment_type = getattr(segment, "type", "")
+            data = getattr(segment, "data", {})
+
         if segment_type == "text":
-            text_parts.append(str(data.get("text", "")))
+            text = data.get("text", "") if isinstance(data, dict) else getattr(data, "text", "")
+            text_parts.append(str(text))
         elif segment_type == "json":
-            url, preview = extract_json_url_and_preview(str(data.get("data", "")))
+            json_data = data.get("data", "") if isinstance(data, dict) else getattr(data, "data", "")
+            url, preview = extract_json_url_and_preview(str(json_data))
             if url:
                 json_urls.append(url)
             if preview:
