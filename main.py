@@ -9,7 +9,14 @@ from astrbot.api.message_components import Node, Nodes
 from astrbot.api.star import Context, Star
 
 from .models import BaseParser, ParseResult
-from .platforms import BilibiliParser, DouyinParser, RedBookParser
+from .platforms import (
+    BilibiliParser,
+    DouyinParser,
+    RedBookParser,
+    WeiboParser,
+    XiaoheiheParser,
+    ZhihuParser,
+)
 from .utils import extract_context
 
 
@@ -33,6 +40,9 @@ class MultiParserPlugin(Star):
             "bilibili": BilibiliParser(config),
             "douyin": DouyinParser(config),
             "redbook": RedBookParser(config),
+            "weibo": WeiboParser(config),
+            "xiaoheihe": XiaoheiheParser(config),
+            "zhihu": ZhihuParser(config),
         }
 
     def _enabled_parsers(self) -> list[BaseParser]:

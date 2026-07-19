@@ -2,8 +2,8 @@
   "enabled_platforms": {
     "description": "启用平台",
     "type": "list",
-    "default": ["bilibili", "douyin", "redbook"],
-    "hint": "可选 bilibili、douyin、redbook。"
+    "default": ["bilibili", "douyin", "redbook", "weibo", "xiaoheihe", "zhihu"],
+    "hint": "可选 bilibili、douyin、redbook、weibo、xiaoheihe、zhihu。"
   },
   "douyin_cookies": {
     "description": "抖音 Cookies",
@@ -16,6 +16,24 @@
     "type": "text",
     "default": "",
     "hint": "选填。部分内容配置 Cookies 后更容易获得可用或无水印资源。"
+  },
+  "weibo_cookies": {
+    "description": "微博 Cookies",
+    "type": "text",
+    "default": "",
+    "hint": "选填。仅用于需要登录态的微博页面请求。"
+  },
+  "xiaoheihe_cookies": {
+    "description": "小黑盒 Cookies",
+    "type": "text",
+    "default": "",
+    "hint": "选填。用于小黑盒社区接口请求。"
+  },
+  "zhihu_cookies": {
+    "description": "知乎 Cookies",
+    "type": "text",
+    "default": "",
+    "hint": "选填。用于知乎页面和接口请求。"
   },
   "request_timeout_seconds": {
     "description": "请求超时",

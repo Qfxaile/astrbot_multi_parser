@@ -14,6 +14,18 @@ def test_schema_uses_optional_platform_cookies():
     assert schema["douyin_cookies"]["default"] == ""
     assert schema["redbook_cookies"]["type"] == "text"
     assert schema["redbook_cookies"]["default"] == ""
+    assert schema["enabled_platforms"]["default"] == [
+        "bilibili",
+        "douyin",
+        "redbook",
+        "weibo",
+        "xiaoheihe",
+        "zhihu",
+    ]
+    for platform in ("weibo", "xiaoheihe", "zhihu"):
+        cookie_config = schema[f"{platform}_cookies"]
+        assert cookie_config["type"] == "text"
+        assert cookie_config["default"] == ""
     assert schema["max_video_size_mb"]["default"] == 50
 
 

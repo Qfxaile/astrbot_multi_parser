@@ -71,6 +71,19 @@ def make_plugin(result: ParseResult, **config):
     return plugin
 
 
+def test_plugin_registers_all_supported_parsers():
+    plugin = MultiParserPlugin(None, {"enabled_platforms": []})
+
+    assert set(plugin.parsers) == {
+        "bilibili",
+        "douyin",
+        "redbook",
+        "weibo",
+        "xiaoheihe",
+        "zhihu",
+    }
+
+
 async def collect_results(monkeypatch, result, event=None, **config):
     monkeypatch.setattr(
         main, "extract_context", lambda event: SimpleNamespace(combined_text="url")
