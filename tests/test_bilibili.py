@@ -1,5 +1,3 @@
-import base64
-
 import httpx
 import pytest
 
@@ -359,7 +357,7 @@ def test_article_html_keeps_visible_text_and_image_order():
     ],
 )
 async def test_dynamic_and_opus_materialize_original_images(
-    monkeypatch, page_url, api_path, payload, expected_referer
+    monkeypatch, page_url, api_path, payload, expected_referer, assert_temporary_image
 ):
     image_request = None
     client_kwargs = None
@@ -382,9 +380,10 @@ async def test_dynamic_and_opus_materialize_original_images(
 
     result = await bilibili.BilibiliParser({}).parse(ParseContext(text=page_url))
 
-    assert [(item.kind, item.value) for item in result.ordered_contents] == [
-        ("image", f"base64://{base64.b64encode(b'graphic-image').decode()}")
-    ]
+    assert [item.kind for item in result.ordered_contents] == ["image"]
+    assert_temporary_image(
+        result, result.ordered_contents[0].value, b"graphic-image"
+    )
     assert image_request is not None
     assert str(image_request.url) in {
         "https://i0.hdslb.com/dynamic.jpg",
@@ -397,7 +396,9 @@ async def test_dynamic_and_opus_materialize_original_images(
 
 
 @pytest.mark.asyncio
-async def test_article_materializes_original_image_and_preserves_failed_slot(monkeypatch):
+async def test_article_materializes_original_image_and_preserves_failed_slot(
+    monkeypatch, assert_temporary_image
+):
     article_url = "https://www.bilibili.com/read/cv789"
     html = """
     <html><head><meta property="og:title" content="专栏标题"></head>
@@ -430,12 +431,15 @@ async def test_article_materializes_original_image_and_preserves_failed_slot(mon
 
     result = await bilibili.BilibiliParser({}).parse(ParseContext(text=article_url))
 
-    assert [(item.kind, item.value) for item in result.ordered_contents] == [
+    assert [(item.kind, item.value) for item in result.ordered_contents[:3]] == [
         ("text", "第一段"),
         ("image_error", "第 1 张图片获取失败：HTTP 403"),
         ("text", "第二段"),
-        ("image", f"base64://{base64.b64encode(b'article-image').decode()}"),
     ]
+    assert result.ordered_contents[3].kind == "image"
+    assert_temporary_image(
+        result, result.ordered_contents[3].value, b"article-image"
+    )
     assert [str(request.url) for request in image_requests] == [
         "https://i0.hdslb.com/failed.jpg",
         "https://i0.hdslb.com/working.jpg",
@@ -447,7 +451,7 @@ async def test_article_materializes_original_image_and_preserves_failed_slot(mon
 
 
 @pytest.mark.asyncio
-async def test_video_materializes_original_cover(monkeypatch):
+async def test_video_materializes_original_cover(monkeypatch, assert_temporary_image):
     parser = bilibili.BilibiliParser({})
 
     async def get_video_info(video_id):
@@ -483,9 +487,7 @@ async def test_video_materializes_original_cover(monkeypatch):
 
     result = await parser.parse(ParseContext(text="BV1xx411c7mD"))
 
-    assert result.cover_urls == [
-        f"base64://{base64.b64encode(b'video-cover').decode()}"
-    ]
+    assert_temporary_image(result, result.cover_urls[0], b"video-cover")
     assert result.video_url == "https://video.example/play.mp4"
     assert image_request is not None
     assert str(image_request.url) == "https://i0.hdslb.com/video.jpg"

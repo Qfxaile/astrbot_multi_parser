@@ -2,7 +2,7 @@ from collections.abc import Iterable
 
 from ...models import OrderedContent, ParseResult
 from .common import format_count, media_key, normalize_media_url, normalize_text
-from .content import extract_html_video_urls, parse_html_body
+from .content import parse_html_content
 
 
 def _author_name(value: object) -> str:
@@ -56,8 +56,7 @@ def _content_result(
         or payload.get("content_html")
         or ""
     )
-    contents = parse_html_body(html_body)
-    video_urls = extract_html_video_urls(html_body)
+    contents, video_urls = parse_html_content(html_body)
     stats_line = _stats_line(payload, stats)
     return ParseResult(
         platform="zhihu",
@@ -102,15 +101,13 @@ def parse_question_payload(
         or payload.get("content")
         or ""
     )
-    contents = parse_html_body(detail)
-    videos = extract_html_video_urls(detail)
+    contents, videos = parse_html_content(detail)
     author = _author_name(payload.get("author"))
 
     if isinstance(first_answer, dict) and first_answer:
         answer_author = _author_name(first_answer.get("author"))
         answer_body = str(first_answer.get("content") or "")
-        answer_contents = parse_html_body(answer_body)
-        answer_videos = extract_html_video_urls(answer_body)
+        answer_contents, answer_videos = parse_html_content(answer_body)
         if answer_contents or answer_videos:
             contents.append(
                 OrderedContent(
@@ -165,8 +162,9 @@ def parse_pin_payload(payload: object) -> ParseResult:
     raw_content = payload.get("content")
 
     if isinstance(raw_content, str):
-        contents.extend(parse_html_body(raw_content))
-        videos.extend(extract_html_video_urls(raw_content))
+        raw_contents, raw_videos = parse_html_content(raw_content)
+        contents.extend(raw_contents)
+        videos.extend(raw_videos)
     elif isinstance(raw_content, list):
         for block in raw_content:
             if not isinstance(block, dict):
@@ -175,12 +173,14 @@ def parse_pin_payload(payload: object) -> ParseResult:
             if block_type in {"text", "paragraph"}:
                 value = str(block.get("content") or block.get("text") or "")
                 if "<" in value and ">" in value:
-                    contents.extend(parse_html_body(value))
+                    block_contents, block_videos = parse_html_content(value)
+                    contents.extend(block_contents)
+                    videos.extend(block_videos)
                 elif text := normalize_text(value, keep_newlines=True):
                     contents.append(OrderedContent(kind="text", value=text))
             elif block_type in {"image", "img"}:
                 image_url = normalize_media_url(
-                    str(block.get("url") or block.get("original_url") or "")
+                    str(block.get("original_url") or block.get("url") or "")
                 )
                 key = media_key(image_url)
                 if image_url and key and key not in seen_images:

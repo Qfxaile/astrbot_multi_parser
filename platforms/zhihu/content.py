@@ -109,15 +109,19 @@ def _looks_like_video(url: str) -> bool:
     )
 
 
-def parse_html_body(value: str, page_url: str | None = None) -> list[OrderedContent]:
+def parse_html_content(
+    value: str, page_url: str | None = None
+) -> tuple[list[OrderedContent], list[str]]:
+    """一次遍历提取知乎正文和视频 URL。"""
     parser = ZhihuHTMLParser(page_url)
     parser.feed(value or "")
     parser.close()
-    return parser.contents
+    return parser.contents, parser.video_urls
+
+
+def parse_html_body(value: str, page_url: str | None = None) -> list[OrderedContent]:
+    return parse_html_content(value, page_url)[0]
 
 
 def extract_html_video_urls(value: str, page_url: str | None = None) -> list[str]:
-    parser = ZhihuHTMLParser(page_url)
-    parser.feed(value or "")
-    parser.close()
-    return parser.video_urls
+    return parse_html_content(value, page_url)[1]

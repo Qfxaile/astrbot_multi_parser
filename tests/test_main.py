@@ -169,6 +169,24 @@ async def collect_results(monkeypatch, result, event=None, **config):
 
 
 @pytest.mark.asyncio
+async def test_handle_parse_cleans_temporary_images_after_send(monkeypatch, tmp_path):
+    image_path = tmp_path / "original.webp"
+    image_path.write_bytes(b"original-image")
+    result = ParseResult(
+        platform="test",
+        image_urls=[str(image_path)],
+        temporary_files=[image_path],
+    )
+
+    messages = await collect_results(monkeypatch, result)
+
+    assert messages[0][0].file == image_path.resolve().as_uri()
+    assert messages[0][0].path == str(image_path.resolve())
+    assert not image_path.exists()
+    assert result.temporary_files == []
+
+
+@pytest.mark.asyncio
 async def test_two_images_keep_legacy_info_chain_order(monkeypatch):
     result = ParseResult(
         platform="test",

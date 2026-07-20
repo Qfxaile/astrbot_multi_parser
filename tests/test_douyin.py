@@ -1,9 +1,32 @@
-import base64
-
 import httpx
 import pytest
 from astrbot_multi_parser.models import ParseContext
 from astrbot_multi_parser.platforms import douyin
+
+
+@pytest.mark.asyncio
+async def test_probe_video_url_does_not_read_body_when_range_is_ignored():
+    class FailingVideoStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            raise AssertionError("视频探测不得读取响应正文")
+            yield b""  # pragma: no cover
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Length": str(500 * 1024 * 1024)},
+            stream=FailingVideoStream(),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), follow_redirects=True
+    ) as client:
+        url = await douyin.DouyinParser({})._probe_video_url(
+            client, "video-token", "https://www.iesdouyin.com/share/video/1/"
+        )
+
+    assert url == ""
 
 
 @pytest.mark.asyncio
@@ -162,7 +185,9 @@ async def test_video_probe_selects_largest_candidate():
 
 
 @pytest.mark.asyncio
-async def test_parse_materializes_images_without_leaking_douyin_cookies(monkeypatch):
+async def test_parse_materializes_images_without_leaking_douyin_cookies(
+    monkeypatch, assert_temporary_image
+):
     image_url = "https://p3-sign.douyinpic.com/image.webp?token=secret"
     share_url = "https://www.iesdouyin.com/share/note/123/"
     router_data = {
@@ -214,9 +239,7 @@ async def test_parse_materializes_images_without_leaking_douyin_cookies(monkeypa
         {"douyin_cookies": "ttwid=test-session"}
     ).parse(ParseContext(text=share_url))
 
-    assert result.image_urls == [
-        f"base64://{base64.b64encode(b'image-content').decode()}"
-    ]
+    assert_temporary_image(result, result.image_urls[0], b"image-content")
     assert image_request is not None
     assert image_request.headers["Referer"] == share_url
     assert "Mobile/15E148" in image_request.headers["User-Agent"]
@@ -226,7 +249,9 @@ async def test_parse_materializes_images_without_leaking_douyin_cookies(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_parse_keeps_failed_douyin_image_slot(monkeypatch, caplog):
+async def test_parse_keeps_failed_douyin_image_slot(
+    monkeypatch, caplog, assert_temporary_image
+):
     failed_url = "https://p3-sign.douyinpic.com/failed.webp?token=secret"
     working_url = "https://p26-sign.douyinpic.com/working.webp?token=secret"
     share_url = "https://www.iesdouyin.com/share/note/123/"
@@ -270,10 +295,8 @@ async def test_parse_keeps_failed_douyin_image_slot(monkeypatch, caplog):
     result = await douyin.DouyinParser({}).parse(ParseContext(text=share_url))
 
     assert result.title == "图文标题"
-    assert result.image_urls == [
-        "",
-        f"base64://{base64.b64encode(b'working-image').decode()}"
-    ]
+    assert result.image_urls[0] == ""
+    assert_temporary_image(result, result.image_urls[1], b"working-image")
     assert result.image_errors == {0: "第 1 张图片获取失败：HTTP 403"}
     warning = next(
         record.message
@@ -285,7 +308,7 @@ async def test_parse_keeps_failed_douyin_image_slot(monkeypatch, caplog):
 
 
 @pytest.mark.asyncio
-async def test_parse_materializes_video_cover(monkeypatch):
+async def test_parse_materializes_video_cover(monkeypatch, assert_temporary_image):
     cover_url = "https://p3-sign.douyinpic.com/original-cover.webp"
     share_url = "https://www.iesdouyin.com/share/video/123/"
     router_data = {
@@ -327,13 +350,13 @@ async def test_parse_materializes_video_cover(monkeypatch):
 
     result = await douyin.DouyinParser({}).parse(ParseContext(text=share_url))
 
-    assert result.cover_urls == [
-        f"base64://{base64.b64encode(b'original-cover').decode()}"
-    ]
+    assert_temporary_image(result, result.cover_urls[0], b"original-cover")
 
 
 @pytest.mark.asyncio
-async def test_parse_slides_materializes_original_candidates_in_place(monkeypatch):
+async def test_parse_slides_materializes_original_candidates_in_place(
+    monkeypatch, assert_temporary_image
+):
     share_url = "https://www.iesdouyin.com/share/slides/123/"
     original_url = "https://p3-sign.douyinpic.com/original-1.webp"
     fallback_url = "https://p26-sign.douyinpic.com/fallback-2.webp"
@@ -391,11 +414,9 @@ async def test_parse_slides_materializes_original_candidates_in_place(monkeypatc
         {"douyin_cookies": "sessionid=slides-session"}
     ).parse(ParseContext(text=share_url))
 
-    assert result.image_urls == [
-        f"base64://{base64.b64encode(original_url.encode()).decode()}",
-        f"base64://{base64.b64encode(fallback_url.encode()).decode()}",
-        "",
-    ]
+    assert_temporary_image(result, result.image_urls[0], original_url.encode())
+    assert_temporary_image(result, result.image_urls[1], fallback_url.encode())
+    assert result.image_urls[2] == ""
     assert result.image_errors == {2: "第 3 张图片获取失败：HTTP 403"}
     assert [str(request.url) for request in image_requests] == [
         original_url,

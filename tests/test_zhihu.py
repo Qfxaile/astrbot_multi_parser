@@ -1,4 +1,3 @@
-import base64
 import json
 from types import SimpleNamespace
 from urllib.parse import quote
@@ -23,6 +22,34 @@ from astrbot_multi_parser.platforms.zhihu.handlers import (
     parse_question_payload,
 )
 from astrbot_multi_parser.platforms.zhihu import request as zhihu_request
+from astrbot_multi_parser.platforms.zhihu import content as zhihu_content
+
+
+def test_answer_content_is_parsed_only_once(monkeypatch):
+    feed_calls = 0
+    original_feed = zhihu_content.ZhihuHTMLParser.feed
+
+    def tracking_feed(self, data):
+        nonlocal feed_calls
+        feed_calls += 1
+        return original_feed(self, data)
+
+    monkeypatch.setattr(zhihu_content.ZhihuHTMLParser, "feed", tracking_feed)
+
+    result = parse_answer_payload(
+        {
+            "question": {"title": "问题"},
+            "author": {"name": "答主"},
+            "content": (
+                '<p>正文</p><img data-original="https://picx.zhimg.com/a.jpg">'
+                '<video src="https://video.zhihu.com/a.mp4"></video>'
+            ),
+        }
+    )
+
+    assert feed_calls == 1
+    assert result.video_url == "https://video.zhihu.com/a.mp4"
+    assert [item.kind for item in result.ordered_contents] == ["text", "image"]
 
 
 def test_normalize_text_decodes_entities_and_compacts_whitespace():
@@ -197,7 +224,8 @@ def test_pin_payload_handles_structured_text_image_and_video():
                 {"type": "text", "content": "想法正文"},
                 {
                     "type": "image",
-                    "url": "https://pic1.zhimg.com/pin.jpg",
+                    "url": "https://pic1.zhimg.com/pin-thumbnail.jpg",
+                    "original_url": "https://pic1.zhimg.com/pin-original.jpg",
                 },
                 {
                     "type": "video",
@@ -217,7 +245,7 @@ def test_pin_payload_handles_structured_text_image_and_video():
     assert result.author == "想法作者"
     assert result.ordered_contents == [
         OrderedContent(kind="text", value="想法正文"),
-        OrderedContent(kind="image", value="https://pic1.zhimg.com/pin.jpg"),
+        OrderedContent(kind="image", value="https://pic1.zhimg.com/pin-original.jpg"),
     ]
     assert result.video_url == "https://video.zhihu.com/pin.mp4"
     assert result.extra_lines == ["赞同 8 | 评论 1"]
@@ -279,7 +307,7 @@ def install_zhihu_mock_client(monkeypatch, handler):
 
 @pytest.mark.asyncio
 async def test_parse_answer_uses_cookie_only_for_zhihu_and_materializes_image(
-    monkeypatch,
+    monkeypatch, assert_temporary_image
 ):
     from astrbot_multi_parser.platforms import ZhihuParser
 
@@ -309,9 +337,7 @@ async def test_parse_answer_uses_cookie_only_for_zhihu_and_materializes_image(
 
     assert result.title == "接口问题"
     assert result.author == "接口答主"
-    assert result.ordered_contents[0].value == (
-        f"base64://{base64.b64encode(image_bytes).decode()}"
-    )
+    assert_temporary_image(result, result.ordered_contents[0].value, image_bytes)
 
 
 @pytest.mark.asyncio

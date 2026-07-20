@@ -1,4 +1,3 @@
-import base64
 import json
 
 import httpx
@@ -452,7 +451,9 @@ def test_discovery_video_cover_prefers_original_trace_id():
 
 
 @pytest.mark.asyncio
-async def test_parse_explore_materializes_original_without_leaking_cookies(monkeypatch):
+async def test_parse_explore_materializes_original_without_leaking_cookies(
+    monkeypatch, assert_temporary_image
+):
     page_url = "https://www.xiaohongshu.com/explore/note123?xsec_token=token"
     image_url = "https://sns-img-qc.xhscdn.com/notes_pre_post/original"
     state = {
@@ -499,9 +500,7 @@ async def test_parse_explore_materializes_original_without_leaking_cookies(monke
         {"redbook_cookies": "web_session=cookie-value"}
     ).parse(ParseContext(text=page_url))
 
-    assert result.image_urls == [
-        f"base64://{base64.b64encode(b'original-image').decode()}"
-    ]
+    assert_temporary_image(result, result.image_urls[0], b"original-image")
     assert image_request is not None
     assert image_request.headers["Referer"] == page_url.split("?", 1)[0]
     assert "Mobile/15E148" in image_request.headers["User-Agent"]
@@ -512,7 +511,9 @@ async def test_parse_explore_materializes_original_without_leaking_cookies(monke
 
 
 @pytest.mark.asyncio
-async def test_parse_discovery_materializes_and_keeps_failed_slot(monkeypatch):
+async def test_parse_discovery_materializes_and_keeps_failed_slot(
+    monkeypatch, assert_temporary_image
+):
     source_url = "https://www.xiaohongshu.com/discovery/item/note123"
     discovery_url = source_url
     successful_url = "https://sns-img-qc.xhscdn.com/original-success"
@@ -555,10 +556,8 @@ async def test_parse_discovery_materializes_and_keeps_failed_slot(monkeypatch):
 
     result = await redbook.RedBookParser({}).parse(ParseContext(text=source_url))
 
-    assert result.image_urls == [
-        f"base64://{base64.b64encode(b'discovery-image').decode()}",
-        "",
-    ]
+    assert_temporary_image(result, result.image_urls[0], b"discovery-image")
+    assert result.image_urls[1] == ""
     assert result.image_errors == {1: "第 2 张图片获取失败：HTTP 403"}
     assert [request.headers["Referer"] for request in image_requests] == [
         discovery_url,
@@ -567,7 +566,9 @@ async def test_parse_discovery_materializes_and_keeps_failed_slot(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_parse_explore_materializes_video_cover_with_session(monkeypatch):
+async def test_parse_explore_materializes_video_cover_with_session(
+    monkeypatch, assert_temporary_image
+):
     page_url = "https://www.xiaohongshu.com/explore/video123?xsec_token=token"
     cover_url = "https://sns-img-qc.xhscdn.com/notes_pre_post/explore-cover"
     video_url = "https://video.example/explore.mp4"
@@ -619,9 +620,7 @@ async def test_parse_explore_materializes_video_cover_with_session(monkeypatch):
         {"redbook_cookies": "web_session=explore-session"}
     ).parse(ParseContext(text=page_url))
 
-    assert result.cover_urls == [
-        f"base64://{base64.b64encode(b'explore-cover').decode()}"
-    ]
+    assert_temporary_image(result, result.cover_urls[0], b"explore-cover")
     assert result.video_url == video_url
     assert cover_request is not None
     assert cover_request.headers["Referer"] == page_url.split("?", 1)[0]
@@ -637,7 +636,9 @@ async def test_parse_explore_materializes_video_cover_with_session(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_parse_discovery_materializes_video_cover_with_session(monkeypatch):
+async def test_parse_discovery_materializes_video_cover_with_session(
+    monkeypatch, assert_temporary_image
+):
     source_url = "https://www.xiaohongshu.com/discovery/item/video123"
     cover_url = "https://sns-img-qc.xhscdn.com/notes_pre_post/discovery-cover"
     video_url = "https://video.example/discovery.mp4"
@@ -692,9 +693,7 @@ async def test_parse_discovery_materializes_video_cover_with_session(monkeypatch
         {"redbook_cookies": "web_session=discovery-session"}
     ).parse(ParseContext(text=source_url))
 
-    assert result.cover_urls == [
-        f"base64://{base64.b64encode(b'discovery-cover').decode()}"
-    ]
+    assert_temporary_image(result, result.cover_urls[0], b"discovery-cover")
     assert result.video_url == video_url
     assert cover_request is not None
     assert cover_request.headers["Referer"] == source_url

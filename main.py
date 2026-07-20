@@ -271,6 +271,7 @@ class MultiParserPlugin(Star):
 
         # 解析器按配置顺序尝试匹配；命中后即完成处理，避免同一链接被重复解析。
         for parser in self._enabled_parsers():
+            result: ParseResult | None = None
             try:
                 if not await parser.match(context):
                     continue
@@ -369,3 +370,6 @@ class MultiParserPlugin(Star):
                 logger.warning(f"{parser.name} 解析失败: {exc}")
                 yield event.plain_result(f"{parser.name} 解析失败: {exc}")
                 return
+            finally:
+                if result is not None:
+                    result.cleanup_temporary_files()

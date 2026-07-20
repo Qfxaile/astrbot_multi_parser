@@ -1,4 +1,4 @@
-import base64
+from pathlib import Path
 
 import httpx
 import pytest
@@ -9,7 +9,50 @@ from astrbot.api.message_components import Image, Plain
 
 
 @pytest.mark.asyncio
-async def test_materialize_images_preserves_bytes_headers_and_base64_slots():
+async def test_materialize_images_streams_original_bytes_to_temporary_file(tmp_path):
+    class ChunkedImageStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for chunk in (b"original-", b"image-", b"bytes"):
+                yield chunk
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "image/webp"},
+            stream=ChunkedImageStream(),
+            request=request,
+        )
+
+    result = models.ParseResult(
+        platform="douyin",
+        image_urls=["https://img.example/original.webp"],
+    )
+    parser = models.BaseParser({"image_temp_dir": str(tmp_path)})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await parser.materialize_images(
+            result, client, "https://share.example/post/1"
+        )
+
+    image_path = Path(result.image_urls[0])
+    assert image_path.parent == tmp_path
+    assert image_path.suffix == ".webp"
+    assert image_path.read_bytes() == b"original-image-bytes"
+    assert not result.image_urls[0].startswith("base64://")
+    assert result.temporary_files == [image_path]
+
+    component = result.info_chain(include_summary=False)[0]
+    assert component.file == image_path.resolve().as_uri()
+    assert component.path == str(image_path.resolve())
+
+    result.cleanup_temporary_files()
+    assert not image_path.exists()
+    assert result.temporary_files == []
+
+
+@pytest.mark.asyncio
+async def test_materialize_images_preserves_bytes_headers_and_temporary_slots(
+    assert_temporary_image,
+):
     requests = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -32,9 +75,7 @@ async def test_materialize_images_preserves_bytes_headers_and_base64_slots():
 
     assert returned is result
     assert result.cover_urls == ["base64://YWxyZWFkeQ=="]
-    assert result.image_urls == [
-        f"base64://{base64.b64encode(b'\x00raw-image\xff').decode()}"
-    ]
+    assert_temporary_image(result, result.image_urls[0], b"\x00raw-image\xff")
     assert len(requests) == 1
     assert requests[0].headers["Referer"] == "https://share.example/post/1"
     assert requests[0].headers["User-Agent"] == "session-agent"
@@ -42,7 +83,9 @@ async def test_materialize_images_preserves_bytes_headers_and_base64_slots():
 
 
 @pytest.mark.asyncio
-async def test_materialize_images_keeps_failed_legacy_slot_and_index():
+async def test_materialize_images_keeps_failed_legacy_slot_and_index(
+    assert_temporary_image,
+):
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/failed.jpg":
             return httpx.Response(403, request=request)
@@ -61,18 +104,16 @@ async def test_materialize_images_keeps_failed_legacy_slot_and_index():
             result, client, "https://share.example/post/1"
         )
 
-    assert result.cover_urls == [
-        f"base64://{base64.b64encode(b'/cover.jpg').decode()}"
-    ]
-    assert result.image_urls == [
-        "",
-        f"base64://{base64.b64encode(b'/final.jpg').decode()}",
-    ]
+    assert_temporary_image(result, result.cover_urls[0], b"/cover.jpg")
+    assert result.image_urls[0] == ""
+    assert_temporary_image(result, result.image_urls[1], b"/final.jpg")
     assert result.image_errors == {1: "第 2 张图片获取失败：HTTP 403"}
 
 
 @pytest.mark.asyncio
-async def test_materialize_images_preserves_ordered_text_and_marks_failure():
+async def test_materialize_images_preserves_ordered_text_and_marks_failure(
+    assert_temporary_image,
+):
     requested_urls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -100,17 +141,17 @@ async def test_materialize_images_preserves_ordered_text_and_marks_failure():
             result, client, "https://share.example/post/1"
         )
 
-    assert result.ordered_contents == [
+    assert result.ordered_contents[:3] == [
         models.OrderedContent(kind="text", value="第一段"),
         models.OrderedContent(
             kind="image_error", value="第 1 张图片获取失败：ReadTimeout"
         ),
         models.OrderedContent(kind="text", value="第二段"),
-        models.OrderedContent(
-            kind="image",
-            value=f"base64://{base64.b64encode(b'ordered-image').decode()}",
-        ),
     ]
+    assert result.ordered_contents[3].kind == "image"
+    assert_temporary_image(
+        result, result.ordered_contents[3].value, b"ordered-image"
+    )
     assert result.image_urls == ["https://legacy.example/should-not-download.jpg"]
     assert requested_urls == [
         "https://img.example/failed.jpg",
@@ -228,7 +269,9 @@ async def test_materialize_images_converts_malformed_ordered_url_to_error(caplog
 
 
 @pytest.mark.asyncio
-async def test_materialize_images_rejects_unsafe_legacy_urls_without_requests():
+async def test_materialize_images_rejects_unsafe_legacy_urls_without_requests(
+    assert_temporary_image,
+):
     requested_urls = []
     unsafe_urls = [
         "ftp://img.example/file.jpg",
@@ -261,11 +304,13 @@ async def test_materialize_images_rejects_unsafe_legacy_urls_without_requests():
         result.image_errors[index].startswith(f"第 {index + 1} 张图片获取失败：")
         for index in range(len(unsafe_urls))
     )
-    assert result.image_urls[-1].startswith("base64://")
+    assert_temporary_image(result, result.image_urls[-1], b"unexpected")
 
 
 @pytest.mark.asyncio
-async def test_materialize_images_rejects_unsafe_ordered_urls_and_allows_public_ipv6():
+async def test_materialize_images_rejects_unsafe_ordered_urls_and_allows_public_ipv6(
+    assert_temporary_image,
+):
     requested_urls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -290,7 +335,9 @@ async def test_materialize_images_rejects_unsafe_ordered_urls_and_allows_public_
     assert result.ordered_contents[0] == models.OrderedContent(
         kind="image_error", value="第 1 张图片获取失败：InvalidURL"
     )
-    assert result.ordered_contents[1].value.startswith("base64://")
+    assert_temporary_image(
+        result, result.ordered_contents[1].value, b"public-image"
+    )
 
 
 @pytest.mark.asyncio
@@ -338,7 +385,9 @@ async def test_materialize_images_rejects_redirect_to_private_host():
 
 
 @pytest.mark.asyncio
-async def test_materialize_images_follows_safe_relative_redirect():
+async def test_materialize_images_follows_safe_relative_redirect(
+    assert_temporary_image,
+):
     requested_urls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -359,9 +408,7 @@ async def test_materialize_images_follows_safe_relative_redirect():
         "https://cdn.trusted.example/start.jpg",
         "https://cdn.trusted.example/final.jpg",
     ]
-    assert result.image_urls == [
-        f"base64://{base64.b64encode(b'redirected-image').decode()}"
-    ]
+    assert_temporary_image(result, result.image_urls[0], b"redirected-image")
 
 
 @pytest.mark.asyncio

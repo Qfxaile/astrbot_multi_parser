@@ -1,4 +1,3 @@
-import base64
 from types import SimpleNamespace
 
 import httpx
@@ -202,7 +201,9 @@ async def test_parse_tv_converts_mid_before_status_request(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_parse_article_keeps_text_and_downloaded_image_order(monkeypatch):
+async def test_parse_article_keeps_text_and_downloaded_image_order(
+    monkeypatch, assert_temporary_image
+):
     image_bytes = b"article-image"
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -242,15 +243,16 @@ async def test_parse_article_keeps_text_and_downloaded_image_order(monkeypatch):
 
     assert result.title == "长文章标题"
     assert result.author == "文章作者"
-    assert [(item.kind, item.value) for item in result.ordered_contents] == [
-        ("text", "第一段"),
-        ("image", f"base64://{base64.b64encode(image_bytes).decode()}"),
-        ("text", "第二段"),
-    ]
+    assert [item.kind for item in result.ordered_contents] == ["text", "image", "text"]
+    assert result.ordered_contents[0].value == "第一段"
+    assert_temporary_image(result, result.ordered_contents[1].value, image_bytes)
+    assert result.ordered_contents[2].value == "第二段"
 
 
 @pytest.mark.asyncio
-async def test_parse_video_page_extracts_best_available_stream(monkeypatch):
+async def test_parse_video_page_extracts_best_available_stream(
+    monkeypatch, assert_temporary_image
+):
     cover_bytes = b"cover"
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -287,7 +289,7 @@ async def test_parse_video_page_extracts_best_available_stream(monkeypatch):
     assert result.author == "视频作者"
     assert result.description == "视频简介"
     assert result.video_url == "https://f.video.weibocdn.com/high.mp4"
-    assert result.cover_urls[0].startswith("base64://")
+    assert_temporary_image(result, result.cover_urls[0], cover_bytes)
 
 
 @pytest.mark.asyncio

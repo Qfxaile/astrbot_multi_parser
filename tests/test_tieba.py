@@ -1,5 +1,3 @@
-import base64
-
 import httpx
 import pytest
 
@@ -118,7 +116,9 @@ def test_parse_page_returns_readable_platform_errors(html, expected_error):
 
 
 @pytest.mark.asyncio
-async def test_parse_materializes_images_without_leaking_tieba_cookies(monkeypatch):
+async def test_parse_materializes_images_without_leaking_tieba_cookies(
+    monkeypatch, assert_temporary_image
+):
     page_url = "https://tieba.baidu.com/p/123"
     image_url = "https://tiebapic.baidu.com/forum/pic/item/first.jpg"
     requests = []
@@ -149,8 +149,8 @@ async def test_parse_materializes_images_without_leaking_tieba_cookies(monkeypat
         }
     ).parse(ParseContext(text=page_url))
 
-    assert result.ordered_contents[-1].value == (
-        "base64://" + base64.b64encode(b"image-bytes").decode()
+    assert_temporary_image(
+        result, result.ordered_contents[-1].value, b"image-bytes"
     )
     page_request, image_request = requests
     assert page_request.url.params["see_lz"] == "1"

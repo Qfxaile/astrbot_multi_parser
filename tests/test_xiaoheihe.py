@@ -1,4 +1,3 @@
-import base64
 import json
 import re
 from types import SimpleNamespace
@@ -160,7 +159,9 @@ def install_mock_client(monkeypatch, handler):
 
 
 @pytest.mark.asyncio
-async def test_parse_post_requests_signed_tree_and_materializes_images(monkeypatch):
+async def test_parse_post_requests_signed_tree_and_materializes_images(
+    monkeypatch, assert_temporary_image
+):
     image_bytes = b"post-image"
     requests = []
 
@@ -206,9 +207,7 @@ async def test_parse_post_requests_signed_tree_and_materializes_images(monkeypat
 
     assert result.title == "接口帖子"
     assert result.author == "接口作者"
-    assert result.ordered_contents[0].value == (
-        f"base64://{base64.b64encode(image_bytes).decode()}"
-    )
+    assert_temporary_image(result, result.ordered_contents[0].value, image_bytes)
     assert len(requests) == 2
 
 
@@ -303,7 +302,9 @@ def test_game_helpers_deduplicate_images_and_format_prices():
 
 
 @pytest.mark.asyncio
-async def test_parse_game_page_merges_intro_and_materializes_images(monkeypatch):
+async def test_parse_game_page_merges_intro_and_materializes_images(
+    monkeypatch, assert_temporary_image
+):
     image_bytes = b"game-image"
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -335,5 +336,5 @@ async def test_parse_game_page_merges_intro_and_materializes_images(monkeypatch)
 
     assert result.title == "反恐精英（Counter-Strike 2）"
     assert "开发商：开发商" in result.description
-    assert result.image_urls[0].startswith("base64://")
+    assert_temporary_image(result, result.image_urls[0], image_bytes)
     assert result.video_url == "https://video.max-c.com/game.mp4"

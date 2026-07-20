@@ -336,16 +336,18 @@ class DouyinParser(BaseParser):
         candidates: list[tuple[int, str]] = []
         for ratio in self.PLAY_RATIOS:
             try:
-                response = await client.get(
+                async with client.stream(
+                    "GET",
                     "https://aweme.snssdk.com/aweme/v1/play/",
                     params={"video_id": video_id, "ratio": ratio},
                     headers={"Range": "bytes=0-1", "Referer": referer},
-                )
-                if response.status_code >= 400:
-                    continue
-                size = self._extract_response_size(response.headers)
-                if size > 0:
-                    candidates.append((size, str(response.url)))
+                ) as response:
+                    # 仅接受服务端确认的范围响应，避免 200 响应携带完整视频正文。
+                    if response.status_code != 206:
+                        continue
+                    size = self._extract_response_size(response.headers)
+                    if size > 0:
+                        candidates.append((size, str(response.url)))
             except httpx.HTTPError:
                 continue
         return max(candidates, default=(0, ""), key=lambda item: item[0])[1]
