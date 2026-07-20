@@ -1,6 +1,5 @@
 import httpx
 import pytest
-
 from astrbot_multi_parser.models import ParseContext, ParseResult
 from astrbot_multi_parser.platforms import bilibili
 
@@ -381,9 +380,7 @@ async def test_dynamic_and_opus_materialize_original_images(
     result = await bilibili.BilibiliParser({}).parse(ParseContext(text=page_url))
 
     assert [item.kind for item in result.ordered_contents] == ["image"]
-    assert_temporary_image(
-        result, result.ordered_contents[0].value, b"graphic-image"
-    )
+    assert_temporary_image(result, result.ordered_contents[0].value, b"graphic-image")
     assert image_request is not None
     assert str(image_request.url) in {
         "https://i0.hdslb.com/dynamic.jpg",
@@ -437,9 +434,7 @@ async def test_article_materializes_original_image_and_preserves_failed_slot(
         ("text", "第二段"),
     ]
     assert result.ordered_contents[3].kind == "image"
-    assert_temporary_image(
-        result, result.ordered_contents[3].value, b"article-image"
-    )
+    assert_temporary_image(result, result.ordered_contents[3].value, b"article-image")
     assert [str(request.url) for request in image_requests] == [
         "https://i0.hdslb.com/failed.jpg",
         "https://i0.hdslb.com/working.jpg",

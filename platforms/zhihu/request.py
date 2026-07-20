@@ -3,7 +3,8 @@ from __future__ import annotations
 import re
 
 import httpx
-from httpx import Cookies
+
+from ...core.http import build_cookies, request_timeout
 
 
 class ZhihuRequestError(ValueError):
@@ -27,21 +28,14 @@ class ZhihuRequest:
 
     def create_client(self):
         return httpx.AsyncClient(
-            timeout=float(self.config.get("request_timeout_seconds", 30)),
+            timeout=request_timeout(self.config),
             follow_redirects=True,
             headers=self.HEADERS,
             cookies=self._cookies(),
         )
 
-    def _cookies(self) -> Cookies:
-        cookies = Cookies()
-        for item in str(self.config.get("zhihu_cookies", "")).split(";"):
-            if "=" not in item:
-                continue
-            key, value = item.strip().split("=", 1)
-            if key:
-                cookies.set(key, value, domain=".zhihu.com", path="/")
-        return cookies
+    def _cookies(self) -> httpx.Cookies:
+        return build_cookies(self.config.get("zhihu_cookies", ""), (".zhihu.com",))
 
     async def get_json(self, client, url: str, *, params: dict | None = None) -> dict:
         response = await client.get(url, params=params)

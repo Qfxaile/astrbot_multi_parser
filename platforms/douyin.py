@@ -4,6 +4,8 @@ from urllib.parse import parse_qs, urlparse, urlsplit
 
 import httpx
 
+from ..core.http import build_cookies
+from ..core.media import mark_invalid_legacy_images
 from ..models import BaseParser, ParseContext, ParseResult
 
 
@@ -45,17 +47,12 @@ class DouyinParser(BaseParser):
         if not match:
             return ParseResult(platform=self.name, error="未找到大陆抖音链接。")
 
-        cookies = httpx.Cookies()
-        for item in str(self.config.get("douyin_cookies", "")).split(";"):
-            if "=" in item:
-                key, value = item.strip().split("=", 1)
-                if key:
-                    cookies.set(key, value, domain=".douyin.com", path="/")
-                    cookies.set(key, value, domain=".iesdouyin.com", path="/")
-
-        timeout = int(self.config.get("request_timeout_seconds", 30))
+        cookies = build_cookies(
+            self.config.get("douyin_cookies", ""),
+            (".douyin.com", ".iesdouyin.com"),
+        )
         async with httpx.AsyncClient(
-            timeout=timeout,
+            timeout=self.request_timeout,
             follow_redirects=True,
             headers=self.IOS_HEADERS,
             cookies=cookies,
@@ -111,18 +108,7 @@ class DouyinParser(BaseParser):
                     if probed_url:
                         result.video_url = probed_url
 
-            image_number = 0
-            legacy_index = 0
-            for field_name in ("cover_urls", "image_urls"):
-                image_values = getattr(result, field_name)
-                for field_index, image_url in enumerate(image_values):
-                    image_number += 1
-                    if image_url == self.INVALID_IMAGE_URL:
-                        image_values[field_index] = ""
-                        result.image_errors[legacy_index] = (
-                            f"第 {image_number} 张图片获取失败：InvalidURL"
-                        )
-                    legacy_index += 1
+            mark_invalid_legacy_images(result, self.INVALID_IMAGE_URL)
             return await self.materialize_images(result, client, share_url)
 
     @staticmethod

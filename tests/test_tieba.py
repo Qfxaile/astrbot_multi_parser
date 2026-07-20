@@ -1,6 +1,5 @@
 import httpx
 import pytest
-
 from astrbot_multi_parser.models import ParseContext
 from astrbot_multi_parser.platforms import tieba
 
@@ -104,7 +103,10 @@ def test_legacy_page_cookie_header_forces_old_pc_page(cookie_header, expected):
 @pytest.mark.parametrize(
     ("html", "expected_error"),
     [
-        ("<title>百度安全验证</title><script>window.BIOC_OPTIONS={}</script>", "安全验证"),
+        (
+            "<title>百度安全验证</title><script>window.BIOC_OPTIONS={}</script>",
+            "安全验证",
+        ),
         ("<div>抱歉，该贴已被删除</div>", "已被删除"),
         ("<div>抱歉，根据相关法律法规和政策，本吧暂不开放</div>", "无法访问"),
     ],
@@ -149,9 +151,7 @@ async def test_parse_materializes_images_without_leaking_tieba_cookies(
         }
     ).parse(ParseContext(text=page_url))
 
-    assert_temporary_image(
-        result, result.ordered_contents[-1].value, b"image-bytes"
-    )
+    assert_temporary_image(result, result.ordered_contents[-1].value, b"image-bytes")
     page_request, image_request = requests
     assert page_request.url.params["see_lz"] == "1"
     assert page_request.url.params["pn"] == "1"

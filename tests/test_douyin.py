@@ -144,9 +144,7 @@ def test_slides_data_keeps_static_image_order():
                     },
                     {
                         "url_list": [],
-                        "download_url_list": [
-                            "https://img.example/fallback-2.webp"
-                        ],
+                        "download_url_list": ["https://img.example/fallback-2.webp"],
                     },
                 ],
             }
@@ -235,9 +233,9 @@ async def test_parse_materializes_images_without_leaking_douyin_cookies(
         ),
     )
 
-    result = await douyin.DouyinParser(
-        {"douyin_cookies": "ttwid=test-session"}
-    ).parse(ParseContext(text=share_url))
+    result = await douyin.DouyinParser({"douyin_cookies": "ttwid=test-session"}).parse(
+        ParseContext(text=share_url)
+    )
 
     assert_temporary_image(result, result.image_urls[0], b"image-content")
     assert image_request is not None
@@ -446,12 +444,7 @@ async def test_parse_keeps_unsafe_douyin_candidates_without_requesting_them(
     ]
     slides_data = {
         "aweme_details": [
-            {
-                "images": [
-                    {"download_url_list": [url]}
-                    for url in unsafe_urls
-                ]
-            }
+            {"images": [{"download_url_list": [url]} for url in unsafe_urls]}
         ]
     }
     unexpected_requests = []
@@ -567,9 +560,7 @@ def test_douyin_image_candidates_continue_after_unsafe_values():
                         ],
                     },
                     {
-                        "url_list": [
-                            "https://img.example:8080/private.webp"
-                        ],
+                        "url_list": ["https://img.example:8080/private.webp"],
                         "download_url_list": [
                             "https://img.example/original-fallback.webp"
                         ],

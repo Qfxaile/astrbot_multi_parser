@@ -105,7 +105,7 @@ async def test_parse_explore_uses_minimal_desktop_headers(monkeypatch):
                 )
             html = f"<script>window.__INITIAL_STATE__={json.dumps(state)}</script>"
             return httpx.Response(200, text=html, request=request)
-        html = "<script>window.__INITIAL_STATE__={\"noteData\": {}}</script>"
+        html = '<script>window.__INITIAL_STATE__={"noteData": {}}</script>'
         return httpx.Response(200, text=html, request=request)
 
     real_async_client = httpx.AsyncClient
@@ -237,9 +237,7 @@ def test_discovery_continues_from_unsafe_default_to_safe_url():
                     "type": "normal",
                     "imageList": [
                         {
-                            "urlDefault": (
-                                "http://[::1/private.jpg!transform"
-                            ),
+                            "urlDefault": ("http://[::1/private.jpg!transform"),
                             "url": (
                                 "https://img.example/original.jpg!transform"
                                 "?token=1#preview"
@@ -304,8 +302,7 @@ def test_explore_image_id_cannot_replace_original_cdn_authority():
     result = redbook.RedBookParser({})._parse_explore_state(state, "note123")
 
     assert result.image_urls == [
-        "https://sns-img-qc.xhscdn.com/evil.example/"
-        "image.jpg%3Ftoken%3D1%23preview"
+        "https://sns-img-qc.xhscdn.com/evil.example/image.jpg%3Ftoken%3D1%23preview"
     ]
 
 
@@ -421,7 +418,7 @@ def test_discovery_video_cover_prefers_original_trace_id():
                         "traceId": "notes_pre_post/video-cover",
                         "urlSizeLarge": (
                             "https://cover.example/video.jpg!large?token=1#frame"
-                        )
+                        ),
                     }
                 ]
             },
@@ -579,15 +576,9 @@ async def test_parse_explore_materializes_video_cover_with_session(
                     "note": {
                         "type": "video",
                         "title": "视频标题",
-                        "imageList": [
-                            {"fileId": "notes_pre_post/explore-cover"}
-                        ],
+                        "imageList": [{"fileId": "notes_pre_post/explore-cover"}],
                         "video": {
-                            "media": {
-                                "stream": {
-                                    "h265": [{"masterUrl": video_url}]
-                                }
-                            }
+                            "media": {"stream": {"h265": [{"masterUrl": video_url}]}}
                         },
                     }
                 }
@@ -645,20 +636,14 @@ async def test_parse_discovery_materializes_video_cover_with_session(
     state = {
         "noteData": {
             "normalNotePreloadData": {
-                "imagesList": [
-                    {"traceId": "notes_pre_post/discovery-cover"}
-                ]
+                "imagesList": [{"traceId": "notes_pre_post/discovery-cover"}]
             },
             "data": {
                 "noteData": {
                     "type": "video",
                     "imageList": [],
                     "video": {
-                        "media": {
-                            "stream": {
-                                "h264": [{"masterUrl": video_url}]
-                            }
-                        }
+                        "media": {"stream": {"h264": [{"masterUrl": video_url}]}}
                     },
                 }
             },
@@ -726,9 +711,7 @@ async def test_parse_keeps_unsafe_redbook_candidates_without_requesting_them(
                 "note123": {
                     "note": {
                         "type": "normal",
-                        "imageList": [
-                            {"urlDefault": url} for url in unsafe_urls
-                        ],
+                        "imageList": [{"urlDefault": url} for url in unsafe_urls],
                     }
                 }
             }
@@ -785,7 +768,9 @@ def test_redbook_payloads_handle_null_strings_and_mixed_lists_safely():
                                     "h265": [None, "invalid-variant"],
                                     "h264": [
                                         None,
-                                        {"masterUrl": "https://video.example/video.mp4"},
+                                        {
+                                            "masterUrl": "https://video.example/video.mp4"
+                                        },
                                     ],
                                 }
                             }

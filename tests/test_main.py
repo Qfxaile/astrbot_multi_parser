@@ -2,7 +2,6 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-
 from astrbot.api.message_components import Image, Node, Nodes, Plain, Video
 from astrbot_multi_parser import main
 from astrbot_multi_parser.main import MultiParserPlugin, VideoSizeInfo

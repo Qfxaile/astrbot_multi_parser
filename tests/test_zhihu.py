@@ -4,8 +4,9 @@ from urllib.parse import quote
 
 import httpx
 import pytest
-
 from astrbot_multi_parser.models import OrderedContent, ParseContext
+from astrbot_multi_parser.platforms.zhihu import content as zhihu_content
+from astrbot_multi_parser.platforms.zhihu import request as zhihu_request
 from astrbot_multi_parser.platforms.zhihu.common import (
     merge_unique_urls,
     normalize_media_url,
@@ -21,8 +22,6 @@ from astrbot_multi_parser.platforms.zhihu.handlers import (
     parse_pin_payload,
     parse_question_payload,
 )
-from astrbot_multi_parser.platforms.zhihu import request as zhihu_request
-from astrbot_multi_parser.platforms.zhihu import content as zhihu_content
 
 
 def test_answer_content_is_parsed_only_once(monkeypatch):
@@ -53,16 +52,20 @@ def test_answer_content_is_parsed_only_once(monkeypatch):
 
 
 def test_normalize_text_decodes_entities_and_compacts_whitespace():
-    assert normalize_text("  第一段&nbsp; 内容\r\n\r\n\r\n第二段  ", keep_newlines=True) == (
-        "第一段 内容\n\n第二段"
-    )
+    assert normalize_text(
+        "  第一段&nbsp; 内容\r\n\r\n\r\n第二段  ", keep_newlines=True
+    ) == ("第一段 内容\n\n第二段")
 
 
 @pytest.mark.parametrize(
     ("value", "page_url", "expected"),
     [
         ("//picx.zhimg.com/a.jpg", None, "https://picx.zhimg.com/a.jpg"),
-        ("/video/a.mp4", "https://www.zhihu.com/question/1", "https://www.zhihu.com/video/a.mp4"),
+        (
+            "/video/a.mp4",
+            "https://www.zhihu.com/question/1",
+            "https://www.zhihu.com/video/a.mp4",
+        ),
         ("javascript:alert(1)", None, ""),
         ("data:image/png;base64,AAAA", None, ""),
     ],
@@ -393,7 +396,10 @@ async def test_parse_question_fetches_default_first_answer(monkeypatch):
         (
             "https://www.zhihu.com/pin/4",
             "/api/v4/pins/4",
-            {"author": {"name": "作者"}, "content": [{"type": "text", "content": "想法"}]},
+            {
+                "author": {"name": "作者"},
+                "content": [{"type": "text", "content": "想法"}],
+            },
             "知乎想法",
         ),
     ],

@@ -4,6 +4,8 @@ from urllib.parse import quote, urlparse, urlsplit, urlunsplit
 
 import httpx
 
+from ..core.http import build_cookies
+from ..core.media import mark_invalid_legacy_images
 from ..models import BaseParser, ParseContext, ParseResult
 
 
@@ -46,15 +48,12 @@ class RedBookParser(BaseParser):
         if not match:
             return ParseResult(platform=self.name, error="未找到小红书链接。")
 
-        cookies = httpx.Cookies()
-        for item in str(self.config.get("redbook_cookies", "")).split(";"):
-            if "=" in item:
-                key, value = item.strip().split("=", 1)
-                if key:
-                    cookies.set(key, value, domain=".xiaohongshu.com", path="/")
+        cookies = build_cookies(
+            self.config.get("redbook_cookies", ""), (".xiaohongshu.com",)
+        )
 
         async with httpx.AsyncClient(
-            timeout=int(self.config.get("request_timeout_seconds", 30)),
+            timeout=self.request_timeout,
             follow_redirects=True,
             headers=self.HEADERS,
             cookies=cookies,
@@ -104,18 +103,7 @@ class RedBookParser(BaseParser):
             image_referer = urlunsplit(
                 parsed_content_url._replace(query="", fragment="")
             )
-            image_number = 0
-            legacy_index = 0
-            for field_name in ("cover_urls", "image_urls"):
-                image_values = getattr(result, field_name)
-                for field_index, image_url in enumerate(image_values):
-                    image_number += 1
-                    if image_url == self.INVALID_IMAGE_URL:
-                        image_values[field_index] = ""
-                        result.image_errors[legacy_index] = (
-                            f"第 {image_number} 张图片获取失败：InvalidURL"
-                        )
-                    legacy_index += 1
+            mark_invalid_legacy_images(result, self.INVALID_IMAGE_URL)
             return await self.materialize_images(result, client, image_referer)
 
     @staticmethod
@@ -143,7 +131,9 @@ class RedBookParser(BaseParser):
             ValueError: 页面状态中不存在目标笔记时抛出。
         """
         note_root = state.get("note") if isinstance(state, dict) else None
-        note_map = note_root.get("noteDetailMap") if isinstance(note_root, dict) else None
+        note_map = (
+            note_root.get("noteDetailMap") if isinstance(note_root, dict) else None
+        )
         note_entry = note_map.get(note_id) if isinstance(note_map, dict) else None
         note = note_entry.get("note") if isinstance(note_entry, dict) else None
         if not isinstance(note, dict) or not note:
@@ -153,9 +143,7 @@ class RedBookParser(BaseParser):
         if not isinstance(image_list, list):
             image_list = []
         for image in image_list:
-            image_url = self._select_original_image_url(
-                image, ("urlDefault", "url")
-            )
+            image_url = self._select_original_image_url(image, ("urlDefault", "url"))
             if image_url:
                 image_urls.append(image_url)
         video_url = (
@@ -205,9 +193,7 @@ class RedBookParser(BaseParser):
         if not isinstance(image_list, list):
             image_list = []
         for image in image_list:
-            image_url = self._select_original_image_url(
-                image, ("urlDefault", "url")
-            )
+            image_url = self._select_original_image_url(image, ("urlDefault", "url"))
             if image_url:
                 image_urls.append(image_url)
         video_url = (
@@ -295,9 +281,7 @@ class RedBookParser(BaseParser):
             image_id = image.get(field_name)
             if isinstance(image_id, str) and image_id:
                 path = f"/{quote(image_id.lstrip('/'), safe='/')}"
-                return urlunsplit(
-                    ("https", "sns-img-qc.xhscdn.com", path, "", "")
-                )
+                return urlunsplit(("https", "sns-img-qc.xhscdn.com", path, "", ""))
 
         # 回退 URL 不改写网络位置部分；无效值保留为失败槽位，由统一下载流程生成提示。
         failure_candidate = ""

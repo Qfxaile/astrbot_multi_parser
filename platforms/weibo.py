@@ -9,8 +9,8 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
-from httpx import Cookies
 
+from ..core.http import build_cookies
 from ..models import BaseParser, OrderedContent, ParseContext, ParseResult
 
 
@@ -104,7 +104,9 @@ class WeiboParser(BaseParser):
     }
 
     async def match(self, context: ParseContext) -> bool:
-        return any(re.search(pattern, context.combined_text) for pattern in self.PATTERNS)
+        return any(
+            re.search(pattern, context.combined_text) for pattern in self.PATTERNS
+        )
 
     async def parse(self, context: ParseContext) -> ParseResult:
         text = context.combined_text
@@ -114,34 +116,28 @@ class WeiboParser(BaseParser):
             return await self._parse_video_fid(match.group("fid"))
         for pattern in self.ARTICLE_PATTERNS:
             if match := re.search(pattern, text):
-                article_id = match.groupdict().get("article_query_id") or match.groupdict().get(
-                    "article_path_id"
-                )
+                article_id = match.groupdict().get(
+                    "article_query_id"
+                ) or match.groupdict().get("article_path_id")
                 return await self._parse_article(str(article_id))
         if match := re.search(self.SHARE_PATTERN, text):
             return await self._parse_share(match.group(0))
         for pattern in self.STATUS_PATTERNS:
             if match := re.search(pattern, text):
-                status_id = match.groupdict().get("desktop_id") or match.groupdict().get(
-                    "mobile_id"
-                )
+                status_id = match.groupdict().get(
+                    "desktop_id"
+                ) or match.groupdict().get("mobile_id")
                 return await self._parse_status_id(str(status_id))
         return ParseResult(platform=self.name, error="未找到微博链接。")
 
     def _timeout(self) -> float:
-        return float(self.config.get("request_timeout_seconds", 30))
+        return self.request_timeout
 
-    def _cookies(self) -> Cookies:
-        cookies = Cookies()
-        for item in str(self.config.get("weibo_cookies", "")).split(";"):
-            if "=" not in item:
-                continue
-            key, value = item.strip().split("=", 1)
-            if not key:
-                continue
-            cookies.set(key, value, domain=".weibo.com", path="/")
-            cookies.set(key, value, domain=".weibo.cn", path="/")
-        return cookies
+    def _cookies(self) -> httpx.Cookies:
+        return build_cookies(
+            self.config.get("weibo_cookies", ""),
+            (".weibo.com", ".weibo.cn"),
+        )
 
     @classmethod
     def _is_trusted_weibo_url(cls, url: str) -> bool:
@@ -251,7 +247,8 @@ class WeiboParser(BaseParser):
         ) as client:
             response = await client.post(
                 f"https://h5.video.weibo.com/api/component?page=/show/{fid}",
-                content='data=' + json.dumps(
+                content="data="
+                + json.dumps(
                     {"Component_Play_Playinfo": {"oid": fid}},
                     ensure_ascii=False,
                     separators=(",", ":"),
@@ -264,12 +261,18 @@ class WeiboParser(BaseParser):
     @classmethod
     def _parse_video_payload(cls, payload: object) -> ParseResult:
         data = payload.get("data") if isinstance(payload, dict) else None
-        component = data.get("Component_Play_Playinfo") if isinstance(data, dict) else None
+        component = (
+            data.get("Component_Play_Playinfo") if isinstance(data, dict) else None
+        )
         if not isinstance(component, dict) or not component:
             raise ValueError("微博视频数据为空")
         reward = component.get("reward")
         user = reward.get("user") if isinstance(reward, dict) else None
-        author = str(user.get("name") or "未知作者") if isinstance(user, dict) else "未知作者"
+        author = (
+            str(user.get("name") or "未知作者")
+            if isinstance(user, dict)
+            else "未知作者"
+        )
         urls = component.get("urls")
         video_url = ""
         if isinstance(urls, dict):
@@ -407,11 +410,7 @@ class WeiboParser(BaseParser):
 
         page_info = payload.get("page_info")
         page_info = page_info if isinstance(page_info, dict) else {}
-        title = str(
-            page_info.get("title")
-            or payload.get("status_title")
-            or "微博"
-        )
+        title = str(page_info.get("title") or payload.get("status_title") or "微博")
         contents: list[OrderedContent] = []
         cls._append_status_content(contents, payload)
 

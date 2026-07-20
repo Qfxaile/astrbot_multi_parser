@@ -2,7 +2,6 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-
 from astrbot_multi_parser.models import ParseContext
 from astrbot_multi_parser.platforms import weibo
 from astrbot_multi_parser.platforms.weibo import WeiboParser
@@ -77,9 +76,7 @@ def test_status_payload_keeps_text_images_and_repost_order():
             "user": {"id": 456, "screen_name": "原作者"},
             "bid": "AbCdEf",
             "text": "<p>原微博</p>",
-            "pics": [
-                {"large": {"url": "https://wx2.sinaimg.cn/large/b.jpg"}}
-            ],
+            "pics": [{"large": {"url": "https://wx2.sinaimg.cn/large/b.jpg"}}],
         },
     }
 
@@ -130,7 +127,7 @@ def install_mock_client(monkeypatch, handler):
         "httpx",
         SimpleNamespace(
             AsyncClient=lambda **kwargs: real_async_client(
-            transport=httpx.MockTransport(handler), **kwargs
+                transport=httpx.MockTransport(handler), **kwargs
             )
         ),
         raising=False,
@@ -191,8 +188,7 @@ async def test_parse_tv_converts_mid_before_status_request(monkeypatch):
     await WeiboParser({}).parse(
         ParseContext(
             text=(
-                "https://weibo.com/tv/show/1034:3501756485200075"
-                "?mid=3501756485200075"
+                "https://weibo.com/tv/show/1034:3501756485200075?mid=3501756485200075"
             )
         )
     )
@@ -280,9 +276,7 @@ async def test_parse_video_page_extracts_best_available_stream(
     install_mock_client(monkeypatch, handler)
 
     result = await WeiboParser({}).parse(
-        ParseContext(
-            text="https://video.weibo.com/show?fid=1034:5145615399845897"
-        )
+        ParseContext(text="https://video.weibo.com/show?fid=1034:5145615399845897")
     )
 
     assert result.title == "微博视频"

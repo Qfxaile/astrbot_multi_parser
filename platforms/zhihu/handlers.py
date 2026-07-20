@@ -8,9 +8,10 @@ from .content import parse_html_content
 def _author_name(value: object) -> str:
     if not isinstance(value, dict):
         return "未知作者"
-    return normalize_text(
-        str(value.get("name") or value.get("username") or "")
-    ) or "未知作者"
+    return (
+        normalize_text(str(value.get("name") or value.get("username") or ""))
+        or "未知作者"
+    )
 
 
 def _first_value(payload: dict, *keys: str):
@@ -29,14 +30,11 @@ def _stats_line(payload: dict, fields: Iterable[tuple[str, tuple[str, ...]]]) ->
     return " | ".join(parts)
 
 
-def _append_extra_videos(
-    contents: list[OrderedContent], video_urls: list[str]
-) -> str:
+def _append_extra_videos(contents: list[OrderedContent], video_urls: list[str]) -> str:
     if not video_urls:
         return ""
     contents.extend(
-        OrderedContent(kind="text", value=f"视频链接: {url}")
-        for url in video_urls[1:]
+        OrderedContent(kind="text", value=f"视频链接: {url}") for url in video_urls[1:]
     )
     return video_urls[0]
 
@@ -72,11 +70,7 @@ def parse_answer_payload(payload: object) -> ParseResult:
     if not isinstance(payload, dict) or not payload:
         raise ValueError("知乎回答数据为空")
     question = payload.get("question")
-    title = (
-        str(question.get("title") or "")
-        if isinstance(question, dict)
-        else ""
-    )
+    title = str(question.get("title") or "") if isinstance(question, dict) else ""
     return _content_result(
         payload,
         title=title or "知乎回答",
@@ -89,9 +83,7 @@ def parse_answer_payload(payload: object) -> ParseResult:
     )
 
 
-def parse_question_payload(
-    payload: object, first_answer: object = None
-) -> ParseResult:
+def parse_question_payload(payload: object, first_answer: object = None) -> ParseResult:
     if not isinstance(payload, dict) or not payload:
         raise ValueError("知乎问题数据为空")
     title = normalize_text(str(payload.get("title") or "")) or "知乎问题"
@@ -221,8 +213,7 @@ def _find_video_urls(value: object) -> list[str]:
             if candidate and (
                 "video.zhihu.com" in lowered
                 or any(
-                    marker in lowered
-                    for marker in (".mp4", ".m3u8", ".mov", ".webm")
+                    marker in lowered for marker in (".mp4", ".m3u8", ".mov", ".webm")
                 )
             ):
                 key = media_key(candidate)

@@ -2,10 +2,33 @@ from pathlib import Path
 
 import httpx
 import pytest
-
+from astrbot.api.message_components import Image, Plain
 from astrbot_multi_parser import models
 
-from astrbot.api.message_components import Image, Plain
+
+def test_legacy_models_exports_core_contracts():
+    from astrbot_multi_parser.core.contracts import ParseResult as CoreParseResult
+
+    assert models.ParseResult is CoreParseResult
+
+
+def test_invalid_legacy_image_slots_are_marked_in_original_order():
+    from astrbot_multi_parser.core.media import mark_invalid_legacy_images
+
+    result = models.ParseResult(
+        platform="test",
+        cover_urls=["unsafe-image-url"],
+        image_urls=["https://safe.test/1.jpg", "unsafe-image-url"],
+    )
+
+    mark_invalid_legacy_images(result, "unsafe-image-url")
+
+    assert result.cover_urls == [""]
+    assert result.image_urls == ["https://safe.test/1.jpg", ""]
+    assert result.image_errors == {
+        0: "第 1 张图片获取失败：InvalidURL",
+        2: "第 3 张图片获取失败：InvalidURL",
+    }
 
 
 @pytest.mark.asyncio
@@ -29,9 +52,7 @@ async def test_materialize_images_streams_original_bytes_to_temporary_file(tmp_p
     )
     parser = models.BaseParser({"image_temp_dir": str(tmp_path)})
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        await parser.materialize_images(
-            result, client, "https://share.example/post/1"
-        )
+        await parser.materialize_images(result, client, "https://share.example/post/1")
 
     image_path = Path(result.image_urls[0])
     assert image_path.parent == tmp_path
@@ -127,9 +148,7 @@ async def test_materialize_images_preserves_ordered_text_and_marks_failure(
         image_urls=["https://legacy.example/should-not-download.jpg"],
         ordered_contents=[
             models.OrderedContent(kind="text", value="第一段"),
-            models.OrderedContent(
-                kind="image", value="https://img.example/failed.jpg"
-            ),
+            models.OrderedContent(kind="image", value="https://img.example/failed.jpg"),
             models.OrderedContent(kind="text", value="第二段"),
             models.OrderedContent(
                 kind="image", value="https://img.example/working.jpg"
@@ -149,9 +168,7 @@ async def test_materialize_images_preserves_ordered_text_and_marks_failure(
         models.OrderedContent(kind="text", value="第二段"),
     ]
     assert result.ordered_contents[3].kind == "image"
-    assert_temporary_image(
-        result, result.ordered_contents[3].value, b"ordered-image"
-    )
+    assert_temporary_image(result, result.ordered_contents[3].value, b"ordered-image")
     assert result.image_urls == ["https://legacy.example/should-not-download.jpg"]
     assert requested_urls == [
         "https://img.example/failed.jpg",
@@ -321,7 +338,9 @@ async def test_materialize_images_rejects_unsafe_ordered_urls_and_allows_public_
         platform="bilibili",
         ordered_contents=[
             models.OrderedContent(kind="image", value="https://10.0.0.1/private.jpg"),
-            models.OrderedContent(kind="image", value="https://[2001:4860:4860::8888]:443/public.jpg"),
+            models.OrderedContent(
+                kind="image", value="https://[2001:4860:4860::8888]:443/public.jpg"
+            ),
         ],
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -329,15 +348,11 @@ async def test_materialize_images_rejects_unsafe_ordered_urls_and_allows_public_
             result, client, "https://share.example/post/1"
         )
 
-    assert requested_urls == [
-        "https://[2001:4860:4860::8888]/public.jpg"
-    ]
+    assert requested_urls == ["https://[2001:4860:4860::8888]/public.jpg"]
     assert result.ordered_contents[0] == models.OrderedContent(
         kind="image_error", value="第 1 张图片获取失败：InvalidURL"
     )
-    assert_temporary_image(
-        result, result.ordered_contents[1].value, b"public-image"
-    )
+    assert_temporary_image(result, result.ordered_contents[1].value, b"public-image")
 
 
 @pytest.mark.asyncio
@@ -393,7 +408,9 @@ async def test_materialize_images_follows_safe_relative_redirect(
     def handler(request: httpx.Request) -> httpx.Response:
         requested_urls.append(str(request.url))
         if request.url.path == "/start.jpg":
-            return httpx.Response(302, headers={"Location": "/final.jpg"}, request=request)
+            return httpx.Response(
+                302, headers={"Location": "/final.jpg"}, request=request
+            )
         return httpx.Response(200, content=b"redirected-image", request=request)
 
     parser = models.BaseParser({})

@@ -26,9 +26,7 @@ class ZhihuParser(BaseParser):
     QUESTION_PATTERN = (
         r"https?://(?:www\.)?zhihu\.com/question/(?P<question_only_id>\d+)"
     )
-    ARTICLE_PATTERN = (
-        r"https?://zhuanlan\.zhihu\.com/p/(?P<article_id>\d+)"
-    )
+    ARTICLE_PATTERN = r"https?://zhuanlan\.zhihu\.com/p/(?P<article_id>\d+)"
     TARDIS_ARTICLE_PATTERN = (
         r"https?://(?:www\.)?zhihu\.com/tardis/zm/art/"
         r"(?P<tardis_article_id>\d+)"
@@ -45,7 +43,9 @@ class ZhihuParser(BaseParser):
     )
 
     async def match(self, context: ParseContext) -> bool:
-        return any(re.search(pattern, context.combined_text) for pattern in self.PATTERNS)
+        return any(
+            re.search(pattern, context.combined_text) for pattern in self.PATTERNS
+        )
 
     async def parse(self, context: ParseContext) -> ParseResult:
         url = self._extract_url(context.combined_text)
@@ -72,11 +72,15 @@ class ZhihuParser(BaseParser):
         host = (urlparse(url).hostname or "").lower()
         return host == "zhihu.com" or host.endswith(".zhihu.com")
 
-    async def _parse_url(self, requester: ZhihuRequest, client, url: str) -> ParseResult:
+    async def _parse_url(
+        self, requester: ZhihuRequest, client, url: str
+    ) -> ParseResult:
         if match := re.search(self.ANSWER_PATTERN, url):
             question_id = match.group("question_id")
             answer_id = match.group("answer_id")
-            page_url = f"https://www.zhihu.com/question/{question_id}/answer/{answer_id}"
+            page_url = (
+                f"https://www.zhihu.com/question/{question_id}/answer/{answer_id}"
+            )
             payload = await self._api_or_entity(
                 requester,
                 client,
@@ -119,9 +123,9 @@ class ZhihuParser(BaseParser):
             self.TARDIS_ARTICLE_PATTERN, url
         )
         if article_match:
-            article_id = article_match.groupdict().get("article_id") or article_match.groupdict().get(
-                "tardis_article_id"
-            )
+            article_id = article_match.groupdict().get(
+                "article_id"
+            ) or article_match.groupdict().get("tardis_article_id")
             payload = await self._api_or_entity(
                 requester,
                 client,
@@ -187,20 +191,36 @@ class ZhihuParser(BaseParser):
     def _entity(state: dict, entity_name: str, entity_id: str):
         initial_state = state.get("initialState")
         if not isinstance(initial_state, dict):
-            initial_state = state.get("props") if isinstance(state.get("props"), dict) else {}
-        entities = initial_state.get("entities") if isinstance(initial_state, dict) else None
+            initial_state = (
+                state.get("props") if isinstance(state.get("props"), dict) else {}
+            )
+        entities = (
+            initial_state.get("entities") if isinstance(initial_state, dict) else None
+        )
         if not isinstance(entities, dict):
-            page_props = initial_state.get("pageProps") if isinstance(initial_state, dict) else None
-            entities = page_props.get("entities") if isinstance(page_props, dict) else None
+            page_props = (
+                initial_state.get("pageProps")
+                if isinstance(initial_state, dict)
+                else None
+            )
+            entities = (
+                page_props.get("entities") if isinstance(page_props, dict) else None
+            )
         mapping = entities.get(entity_name) if isinstance(entities, dict) else None
         if not isinstance(mapping, dict):
             return None
-        return mapping.get(str(entity_id)) or mapping.get(int(entity_id)) if str(entity_id).isdigit() else mapping.get(str(entity_id))
+        return (
+            mapping.get(str(entity_id)) or mapping.get(int(entity_id))
+            if str(entity_id).isdigit()
+            else mapping.get(str(entity_id))
+        )
 
     @classmethod
     def _first_entity(cls, state: dict, entity_name: str, question_id: str):
         initial_state = state.get("initialState")
-        entities = initial_state.get("entities") if isinstance(initial_state, dict) else None
+        entities = (
+            initial_state.get("entities") if isinstance(initial_state, dict) else None
+        )
         mapping = entities.get(entity_name) if isinstance(entities, dict) else None
         if not isinstance(mapping, dict):
             return None

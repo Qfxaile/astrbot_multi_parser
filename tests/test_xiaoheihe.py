@@ -1,13 +1,17 @@
 import json
 import re
-from types import SimpleNamespace
 
 import httpx
 import pytest
-
 from astrbot_multi_parser.models import ParseContext
 from astrbot_multi_parser.platforms import xiaoheihe
 from astrbot_multi_parser.platforms.xiaoheihe import XiaoheiheParser
+
+
+def test_signing_algorithm_is_exposed_by_dedicated_module():
+    from astrbot_multi_parser.platforms.xiaoheihe.signing import RequestSigner
+
+    assert RequestSigner.CHAR_TABLE == XiaoheiheParser.CHAR_TABLE
 
 
 @pytest.mark.asyncio
@@ -32,9 +36,7 @@ async def test_rejects_lookalike_xiaoheihe_urls():
 
 
 def test_extracts_token_from_cookie_header():
-    parser = XiaoheiheParser(
-        {"xiaoheihe_cookies": "foo=bar; x_xhh_tokenid=Bdevice123"}
-    )
+    parser = XiaoheiheParser({"xiaoheihe_cookies": "foo=bar; x_xhh_tokenid=Bdevice123"})
 
     assert parser._extract_xhh_tokenid_from_cookies() == "Bdevice123"
 
@@ -78,11 +80,14 @@ async def test_fetch_device_id_posts_reference_profile_payload(monkeypatch):
 def test_signing_algorithm_matches_reference_golden_value(monkeypatch):
     parser = XiaoheiheParser({})
 
-    assert parser._ov(
-        "/bbs/app/link/tree",
-        1700000001,
-        "ABCDEF0123456789ABCDEF0123456789",
-    ) == "V2V1Z67"
+    assert (
+        parser._ov(
+            "/bbs/app/link/tree",
+            1700000001,
+            "ABCDEF0123456789ABCDEF0123456789",
+        )
+        == "V2V1Z67"
+    )
 
     monkeypatch.setattr(xiaoheihe.time, "time", lambda: 1700000000)
     monkeypatch.setattr(xiaoheihe.random, "random", lambda: 0.5)
@@ -147,14 +152,11 @@ def test_post_payload_rejects_missing_link():
 def install_mock_client(monkeypatch, handler):
     real_async_client = httpx.AsyncClient
     monkeypatch.setattr(
-        xiaoheihe,
-        "httpx",
-        SimpleNamespace(
-            AsyncClient=lambda **kwargs: real_async_client(
-                transport=httpx.MockTransport(handler), **kwargs
-            )
+        xiaoheihe.parser.httpx,
+        "AsyncClient",
+        lambda **kwargs: real_async_client(
+            transport=httpx.MockTransport(handler), **kwargs
         ),
-        raising=False,
     )
 
 
@@ -197,9 +199,7 @@ async def test_parse_post_requests_signed_tree_and_materializes_images(
         return httpx.Response(200, content=image_bytes, request=request)
 
     install_mock_client(monkeypatch, handler)
-    parser = XiaoheiheParser(
-        {"xiaoheihe_cookies": "x_xhh_tokenid=Bdevice123"}
-    )
+    parser = XiaoheiheParser({"xiaoheihe_cookies": "x_xhh_tokenid=Bdevice123"})
 
     result = await parser.parse(
         ParseContext(text="https://www.xiaoheihe.cn/app/bbs/link/abc123")
@@ -221,9 +221,7 @@ async def test_parse_post_reports_api_error_without_token_leak(monkeypatch):
         )
 
     install_mock_client(monkeypatch, handler)
-    parser = XiaoheiheParser(
-        {"xiaoheihe_cookies": "x_xhh_tokenid=Bsecret"}
-    )
+    parser = XiaoheiheParser({"xiaoheihe_cookies": "x_xhh_tokenid=Bsecret"})
 
     with pytest.raises(ValueError, match="link/tree 请求失败") as exc_info:
         await parser.parse(

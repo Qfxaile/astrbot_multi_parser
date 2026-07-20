@@ -2,7 +2,7 @@
 
 ## 项目结构与模块组织
 
-本仓库是 AstrBot 的多解析器插件。插件入口和业务逻辑位于仓库根目录及其 Python 模块中；解析器、平台适配和公共工具应按职责拆分，避免在入口文件堆积实现。测试代码放在 `tests/`（如目录已存在），静态资源或示例配置放在 `assets/`、`examples/` 等对应目录。新增模块时优先复用现有目录和命名方式。
+本仓库是 AstrBot 的多解析器插件。`main.py` 只负责插件装配与事件调度；`core/` 存放领域契约、渲染、HTTP 辅助和媒体 I/O；`services/` 存放配置迁移、视频策略与消息交付；`platforms/` 只保留平台特有的匹配、请求和载荷转换。复杂平台使用同名子包按职责拆分，例如 `platforms/xiaoheihe/` 将网络路由、帖子、游戏和签名逻辑隔离。测试代码统一放在 `tests/`。新增能力应优先依赖 `core/` 和 `services/` 的稳定接口，禁止把公共逻辑复制到平台模块或重新堆入入口文件。
 
 ## 构建、测试与开发命令
 
@@ -10,13 +10,15 @@
 python -m compileall .       # 快速检查 Python 语法
 python -m pytest             # 运行全部测试
 python -m pytest tests/test_parser.py -q  # 运行单个测试文件
+python -m ruff format .      # 统一 Python 格式
+python -m ruff check .       # 检查导入、语法和常见缺陷
 ```
 
 若仓库提供 `requirements.txt` 或 `pyproject.toml`，请按其中声明安装依赖；不要将凭据写入配置文件。插件应通过 AstrBot 的本地开发实例验证加载、解析和异常处理行为。
 
 ## 编码风格与命名约定
 
-遵循 PEP 8，使用 4 个空格缩进，文件编码为 UTF-8。函数和变量使用 `snake_case`，类使用 `PascalCase`，常量使用 `UPPER_SNAKE_CASE`。类型注解应覆盖公开函数；复杂解析流程添加简洁中文注释。提交前使用项目已有的 formatter/linter（如 `ruff`、`black`）并保持导入顺序一致。
+遵循 `pyproject.toml` 中的 Ruff 配置，使用 4 个空格缩进、UTF-8 编码和 LF 换行。函数和变量使用 `snake_case`，类使用 `PascalCase`，常量使用 `UPPER_SNAKE_CASE`。类型注解应覆盖公开函数；复杂解析流程添加简洁中文注释。单个模块应保持单一职责，超过约 400 行时优先按业务职责拆分，而不是引入无边界的工具文件或多层继承。
 
 ## 测试指南
 

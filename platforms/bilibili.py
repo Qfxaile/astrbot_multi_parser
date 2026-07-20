@@ -135,7 +135,7 @@ class BilibiliParser(BaseParser):
         if not match and (short_match := re.search(self.SHORT_PATTERN, text)):
             headers = self._headers("https://www.bilibili.com")
             async with httpx.AsyncClient(
-                timeout=int(self.config.get("request_timeout_seconds", 30)),
+                timeout=self.request_timeout,
                 follow_redirects=True,
             ) as client:
                 response = await client.get(short_match.group(0), headers=headers)
@@ -166,7 +166,7 @@ class BilibiliParser(BaseParser):
         )
         referer = "https://www.bilibili.com"
         async with httpx.AsyncClient(
-            timeout=int(self.config.get("request_timeout_seconds", 30)),
+            timeout=self.request_timeout,
             headers=self._headers(referer),
         ) as client:
             return await self.materialize_images(result, client, referer)
@@ -174,7 +174,7 @@ class BilibiliParser(BaseParser):
     async def _parse_dynamic(self, dynamic_id: str) -> ParseResult:
         referer = "https://www.bilibili.com"
         async with httpx.AsyncClient(
-            timeout=int(self.config.get("request_timeout_seconds", 30)),
+            timeout=self.request_timeout,
             headers=self._headers(referer),
         ) as client:
             response = await client.get(
@@ -242,7 +242,7 @@ class BilibiliParser(BaseParser):
     async def _parse_opus(self, opus_id: str) -> ParseResult:
         referer = f"https://www.bilibili.com/opus/{opus_id}"
         async with httpx.AsyncClient(
-            timeout=int(self.config.get("request_timeout_seconds", 30)),
+            timeout=self.request_timeout,
             headers=self._headers(referer),
         ) as client:
             response = await client.get(
@@ -308,7 +308,7 @@ class BilibiliParser(BaseParser):
     async def _parse_article(self, article_id: str) -> ParseResult:
         url = f"https://www.bilibili.com/read/cv{article_id}"
         async with httpx.AsyncClient(
-            timeout=int(self.config.get("request_timeout_seconds", 30)),
+            timeout=self.request_timeout,
             follow_redirects=True,
             headers=self._headers(url),
         ) as client:
@@ -364,9 +364,7 @@ class BilibiliParser(BaseParser):
         else:
             return {"error": "未知ID类型"}
 
-        async with httpx.AsyncClient(
-            timeout=int(self.config.get("request_timeout_seconds", 30))
-        ) as client:
+        async with httpx.AsyncClient(timeout=self.request_timeout) as client:
             data = (
                 await client.get(
                     api_url, headers=self._headers("https://www.bilibili.com")
@@ -393,9 +391,7 @@ class BilibiliParser(BaseParser):
         else:
             return ""
 
-        async with httpx.AsyncClient(
-            timeout=int(self.config.get("request_timeout_seconds", 30))
-        ) as client:
+        async with httpx.AsyncClient(timeout=self.request_timeout) as client:
             data = (
                 await client.get(
                     api_url, headers=self._headers("https://www.bilibili.com")

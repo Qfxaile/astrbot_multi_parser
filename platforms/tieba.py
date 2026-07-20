@@ -7,6 +7,7 @@ from urllib.parse import urljoin
 
 import httpx
 
+from ..core.http import parse_cookie_header
 from ..models import BaseParser, OrderedContent, ParseContext, ParseResult
 
 
@@ -240,7 +241,7 @@ class TiebaParser(BaseParser):
         request_headers = {"Cookie": self._legacy_page_cookie_header()}
 
         async with httpx.AsyncClient(
-            timeout=float(self.config.get("request_timeout_seconds", 30)),
+            timeout=self.request_timeout,
             follow_redirects=False,
             headers=self.HEADERS,
         ) as client:
@@ -264,15 +265,8 @@ class TiebaParser(BaseParser):
         """强制贴吧返回包含首帖正文的旧版服务端页面。"""
         cookie_parts = []
         legacy_switch_added = False
-        raw_cookie = str(self.config.get("tieba_cookies", ""))
-        for segment in raw_cookie.split(";"):
-            segment = segment.strip()
-            if not segment or "=" not in segment:
-                continue
-            name, value = segment.split("=", 1)
-            name = name.strip()
-            if not name:
-                continue
+        raw_cookie = self.config.get("tieba_cookies", "")
+        for name, value in parse_cookie_header(raw_cookie):
             if name == "TIEBA_NEW_PC":
                 if legacy_switch_added:
                     continue
@@ -312,8 +306,6 @@ class TiebaParser(BaseParser):
             video_url=parser.video_url,
             ordered_contents=parser.contents,
             extra_lines=(
-                []
-                if parser.contents or parser.video_url
-                else ["贴吧首帖正文为空。"]
+                [] if parser.contents or parser.video_url else ["贴吧首帖正文为空。"]
             ),
         )
