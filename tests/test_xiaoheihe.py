@@ -40,6 +40,42 @@ def test_extracts_token_from_cookie_header():
     assert parser._extract_xhh_tokenid_from_cookies() == "Bdevice123"
 
 
+@pytest.mark.asyncio
+async def test_build_request_context_fetches_device_when_cookie_missing(monkeypatch):
+    parser = XiaoheiheParser({})
+
+    async def fetch_device_id():
+        return "anonymous-device"
+
+    monkeypatch.setattr(parser, "_fetch_device_id", fetch_device_id, raising=False)
+
+    assert await parser._build_request_context() == {
+        "x_xhh_tokenid": "Banonymous-device",
+        "device_id": "anonymous-device",
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_device_id_posts_reference_profile_payload(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.host == "fp-it.portal101.cn"
+        payload = json.loads(request.content)
+        assert payload["appId"] == "heybox_website"
+        assert payload["organization"] == "0yD85BjYvGFAvHaSQ1mc"
+        assert len(payload["ep"]) > 100
+        assert len(payload["data"]) > 1000
+        return httpx.Response(
+            200,
+            json={"detail": {"deviceId": "profile-device"}},
+            request=request,
+        )
+
+    install_mock_client(monkeypatch, handler)
+
+    assert await XiaoheiheParser({})._fetch_device_id() == "profile-device"
+
+
 def test_signing_algorithm_matches_reference_golden_value(monkeypatch):
     parser = XiaoheiheParser({})
 
