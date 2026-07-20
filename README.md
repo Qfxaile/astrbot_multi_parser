@@ -151,7 +151,7 @@
 ## 项目结构
 
 ```text
-astrbot_multi_parser/
+astrbot_plugin_multi_parser/
 ├── main.py                 # 插件入口、消息分发和发送策略
 ├── models.py               # 解析上下文、统一结果模型和图片安全处理
 ├── utils.py                # 消息文本与分享卡片提取
