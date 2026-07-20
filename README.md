@@ -38,40 +38,7 @@
 
 推荐通过 AstrBot 插件市场安装。手动安装时，将插件目录放入 AstrBot 的 `data/plugins/` 目录，并确保运行环境已安装 `requirements.txt` 中声明的依赖。
 
-当前仅依赖：
-
-```text
-httpx
-```
-
 安装或更新后，在 AstrBot 管理面板中重新加载插件，并按需调整插件配置。
-
-### 使用
-
-插件监听所有消息类型。发送包含受支持链接的消息后，它会自动完成以下流程：
-
-```mermaid
-flowchart LR
-    A[接收消息] --> B[识别平台与链接]
-    B --> C[请求平台页面或接口]
-    C --> D[发送标题、作者与简介]
-    D --> E{内容类型}
-    E -->|图文| F[发送正文与原图]
-    E -->|视频| G[检查远程视频大小]
-    G -->|符合限制| H[通过 URL 发送视频]
-    G -->|超限或大小未知| I[合并转发解析链接]
-```
-
-无需添加命令前缀。例如，下面这些内容都可以直接触发对应解析器：
-
-```text
-https://www.bilibili.com/video/BV...
-https://v.douyin.com/...
-https://www.xiaohongshu.com/explore/...
-https://weibo.com/1234567890/ABCDEF
-https://www.xiaoheihe.cn/app/bbs/link/...
-https://www.zhihu.com/question/123456789
-```
 
 ## 配置说明
 
@@ -79,12 +46,7 @@ https://www.zhihu.com/question/123456789
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `enabled_platforms` | 列表 | 六个平台全部启用 | 需要启用的解析器 |
-| `douyin_cookies` | 文本 | 空 | 可选；缺少 `ttwid` 时会尝试注册匿名会话 |
-| `redbook_cookies` | 文本 | 空 | 可选；可提高部分内容或无水印资源的可用性 |
-| `weibo_cookies` | 文本 | 空 | 可选；用于需要登录态的微博页面请求 |
-| `xiaoheihe_cookies` | 文本 | 空 | 可选；未配置时自动申请匿名设备令牌 |
-| `zhihu_cookies` | 文本 | 空 | 可选；用于知乎页面和接口请求 |
+| `platform_switches` | 对象（布尔开关） | 六个平台全部启用 | 分别控制 B站、抖音、小红书、微博、小黑盒和知乎解析器 |
 | `request_timeout_seconds` | 整数 | `30` | 平台页面和接口请求超时，单位为秒 |
 | `send_video_by_url` | 布尔值 | `true` | 是否通过远程 URL 直接发送解析到的视频 |
 | `max_video_size_mb` | 浮点数 | `50` | 视频直发体积上限，单位为 MB；小于等于 `0` 表示不限制 |
@@ -93,32 +55,11 @@ https://www.zhihu.com/question/123456789
 | `enable_parse_reaction` | 布尔值 | `true` | 识别到受支持链接后，是否给原消息添加表情回应 |
 | `reaction_action` | 字符串 | `set_msg_emoji_like` | OneBot 表情回应动作名，需与协议端保持一致 |
 | `reaction_emoji_id` | 字符串 | `124` | 表情回应使用的表情 ID |
-
-### 常用配置示例
-
-**仅启用 Bilibili 和小红书：**
-
-```json
-{
-  "enabled_platforms": ["bilibili", "redbook"]
-}
-```
-
-**不直接发送视频，只返回解析链接：**
-
-```json
-{
-  "send_video_by_url": false
-}
-```
-
-**取消视频体积限制：**
-
-```json
-{
-  "max_video_size_mb": 0
-}
-```
+| `douyin_cookies` | 文本 | 空 | 可选；缺少 `ttwid` 时会尝试注册匿名会话 |
+| `redbook_cookies` | 文本 | 空 | 可选；可提高部分内容或无水印资源的可用性 |
+| `weibo_cookies` | 文本 | 空 | 可选；用于需要登录态的微博页面请求 |
+| `xiaoheihe_cookies` | 文本 | 空 | 可选；未配置时自动申请匿名设备令牌 |
+| `zhihu_cookies` | 文本 | 空 | 可选；用于知乎页面和接口请求 |
 
 > [!WARNING]
 > Cookie 属于敏感信息。请仅通过 AstrBot 配置或环境管理能力提供，不要写入代码、README、Issue 或日志。
@@ -220,12 +161,10 @@ astrbot_multi_parser/
 2. 实现链接匹配、内容解析和图片物化逻辑。
 3. 在 `platforms/__init__.py` 导出解析器。
 4. 在 `main.py` 注册解析器名称与实例。
-5. 在 `_conf_schema.json` 的 `enabled_platforms` 提示中补充平台名称。
+5. 在 `_conf_schema.json` 的 `platform_switches` 中添加对应布尔开关。
 6. 为正常输入、空值、格式错误和网络失败添加测试。
 
 ## 开发与验证
-
-请在项目配置的 Conda 或其他虚拟环境中执行命令，不要在 Conda `base` 环境安装依赖。
 
 ```powershell
 # 快速检查 Python 语法
@@ -244,5 +183,5 @@ python -m pytest tests/test_bilibili.py -q
 
 - 平台页面和公开接口发生变化后，对应解析器可能需要同步更新。
 - 远程视频能否发送，取决于协议端及目标聊天平台是否支持远程视频 URL。
-- 多图合并转发目前仅对 `aiocqhttp` 和 `satori` 启用。
+- 多图合并转发目前仅对 `aiocqhttp` 启用。
 - 视频链接的有效期、防盗链策略和可访问区域由内容平台决定。

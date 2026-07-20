@@ -1,39 +1,52 @@
 {
-  "enabled_platforms": {
+  "platform_switches": {
     "description": "启用平台",
+    "type": "object",
+    "hint": "按需开启或关闭对应内容平台的链接解析。",
+    "items": {
+      "bilibili": {
+        "description": "B站",
+        "type": "bool",
+        "default": true
+      },
+      "douyin": {
+        "description": "抖音",
+        "type": "bool",
+        "default": true
+      },
+      "redbook": {
+        "description": "小红书",
+        "type": "bool",
+        "default": true
+      },
+      "weibo": {
+        "description": "微博",
+        "type": "bool",
+        "default": true
+      },
+      "xiaoheihe": {
+        "description": "小黑盒",
+        "type": "bool",
+        "default": true
+      },
+      "zhihu": {
+        "description": "知乎",
+        "type": "bool",
+        "default": true
+      }
+    }
+  },
+  "enabled_platforms": {
+    "description": "旧版启用平台",
     "type": "list",
     "default": ["bilibili", "douyin", "redbook", "weibo", "xiaoheihe", "zhihu"],
-    "hint": "可选 bilibili、douyin、redbook、weibo、xiaoheihe、zhihu。"
+    "invisible": true
   },
-  "douyin_cookies": {
-    "description": "抖音 Cookies",
-    "type": "text",
-    "default": "",
-    "hint": "选填。未提供 ttwid 时，插件会尝试注册匿名会话。"
-  },
-  "redbook_cookies": {
-    "description": "小红书 Cookies",
-    "type": "text",
-    "default": "",
-    "hint": "选填。部分内容配置 Cookies 后更容易获得可用或无水印资源。"
-  },
-  "weibo_cookies": {
-    "description": "微博 Cookies",
-    "type": "text",
-    "default": "",
-    "hint": "选填。仅用于需要登录态的微博页面请求。"
-  },
-  "xiaoheihe_cookies": {
-    "description": "小黑盒 Cookies",
-    "type": "text",
-    "default": "",
-    "hint": "选填。用于小黑盒社区接口请求。"
-  },
-  "zhihu_cookies": {
-    "description": "知乎 Cookies",
-    "type": "text",
-    "default": "",
-    "hint": "选填。用于知乎页面和接口请求。"
+  "platform_switches_migrated": {
+    "description": "平台开关迁移状态",
+    "type": "bool",
+    "default": false,
+    "invisible": true
   },
   "request_timeout_seconds": {
     "description": "请求超时",
@@ -82,5 +95,35 @@
     "type": "string",
     "default": "124",
     "hint": "解析成功时使用的表情 ID。"
+  },
+  "douyin_cookies": {
+    "description": "抖音 Cookies",
+    "type": "text",
+    "default": "",
+    "hint": "选填。未提供 ttwid 时，插件会尝试注册匿名会话。"
+  },
+  "redbook_cookies": {
+    "description": "小红书 Cookies",
+    "type": "text",
+    "default": "",
+    "hint": "选填。部分内容配置 Cookies 后更容易获得可用或无水印资源。"
+  },
+  "weibo_cookies": {
+    "description": "微博 Cookies",
+    "type": "text",
+    "default": "",
+    "hint": "选填。仅用于需要登录态的微博页面请求。"
+  },
+  "xiaoheihe_cookies": {
+    "description": "小黑盒 Cookies",
+    "type": "text",
+    "default": "",
+    "hint": "选填。用于小黑盒社区接口请求。"
+  },
+  "zhihu_cookies": {
+    "description": "知乎 Cookies",
+    "type": "text",
+    "default": "",
+    "hint": "选填。用于知乎页面和接口请求。"
   }
 }

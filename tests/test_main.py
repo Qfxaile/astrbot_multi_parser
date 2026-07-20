@@ -22,6 +22,15 @@ class FakeParser:
         return self.result
 
 
+class SavingConfig(dict):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.save_calls = 0
+
+    def save_config(self):
+        self.save_calls += 1
+
+
 class FakeEvent:
     def __init__(
         self,
@@ -82,6 +91,68 @@ def test_plugin_registers_all_supported_parsers():
         "xiaoheihe",
         "zhihu",
     }
+
+
+def test_plugin_migrates_legacy_enabled_platforms_once():
+    config = SavingConfig(
+        enabled_platforms=["bilibili", "zhihu"],
+        platform_switches={
+            "bilibili": True,
+            "douyin": True,
+            "redbook": True,
+            "weibo": True,
+            "xiaoheihe": True,
+            "zhihu": True,
+        },
+        platform_switches_migrated=False,
+    )
+
+    plugin = MultiParserPlugin(None, config)
+
+    assert config["platform_switches"] == {
+        "bilibili": True,
+        "douyin": False,
+        "redbook": False,
+        "weibo": False,
+        "xiaoheihe": False,
+        "zhihu": True,
+    }
+    assert config["platform_switches_migrated"] is True
+    assert config.save_calls == 1
+    assert plugin._enabled_parsers() == [
+        plugin.parsers["bilibili"],
+        plugin.parsers["zhihu"],
+    ]
+
+
+def test_plugin_respects_platform_switches_after_migration():
+    config = SavingConfig(
+        enabled_platforms=[
+            "bilibili",
+            "douyin",
+            "redbook",
+            "weibo",
+            "xiaoheihe",
+            "zhihu",
+        ],
+        platform_switches={
+            "bilibili": False,
+            "douyin": True,
+            "redbook": False,
+            "weibo": False,
+            "xiaoheihe": True,
+            "zhihu": False,
+        },
+        platform_switches_migrated=True,
+    )
+
+    plugin = MultiParserPlugin(None, config)
+
+    assert config.save_calls == 0
+    assert plugin._enabled_parsers() == [
+        plugin.parsers["douyin"],
+        plugin.parsers["xiaoheihe"],
+    ]
 
 
 async def collect_results(monkeypatch, result, event=None, **config):

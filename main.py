@@ -44,11 +44,47 @@ class MultiParserPlugin(Star):
             "xiaoheihe": XiaoheiheParser(config),
             "zhihu": ZhihuParser(config),
         }
+        self._migrate_platform_switches()
+
+    def _migrate_platform_switches(self) -> None:
+        switches = self.config.get("platform_switches")
+        if not isinstance(switches, dict) or bool(
+            self.config.get("platform_switches_migrated", False)
+        ):
+            return
+
+        legacy_platforms = self.config.get("enabled_platforms", [])
+        enabled = (
+            {str(item).lower() for item in legacy_platforms}
+            if isinstance(legacy_platforms, list)
+            else set(self.parsers)
+        )
+        for name in self.parsers:
+            switches[name] = name in enabled
+        self.config["platform_switches_migrated"] = True
+
+        save_config = getattr(self.config, "save_config", None)
+        if callable(save_config):
+            try:
+                save_config()
+            except Exception as exc:
+                logger.warning(f"保存平台开关迁移结果失败: {exc}")
 
     def _enabled_parsers(self) -> list[BaseParser]:
-        enabled = {
-            str(item).lower() for item in self.config.get("enabled_platforms", [])
-        }
+        switches = self.config.get("platform_switches")
+        if isinstance(switches, dict):
+            return [
+                parser
+                for name, parser in self.parsers.items()
+                if bool(switches.get(name, True))
+            ]
+
+        legacy_platforms = self.config.get("enabled_platforms", [])
+        enabled = (
+            {str(item).lower() for item in legacy_platforms}
+            if isinstance(legacy_platforms, list)
+            else set()
+        )
         return [parser for name, parser in self.parsers.items() if name in enabled]
 
     @staticmethod
