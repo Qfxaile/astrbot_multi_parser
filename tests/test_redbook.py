@@ -21,32 +21,42 @@ async def test_matches_supported_redbook_urls(url):
 
 
 @pytest.mark.asyncio
-async def test_parse_upgrades_http_xhslink_to_https(monkeypatch):
+async def test_parse_short_link_keeps_scheme_and_stops_after_first_redirect(
+    monkeypatch,
+):
     short_url = "http://xhslink.com/o/8ReowhzV8oo"
-    page_url = "https://www.xiaohongshu.com/explore/note123"
+    discovery_url = (
+        "https://www.xiaohongshu.com/discovery/item/note123?xsec_token=token"
+    )
+    explore_url = "https://www.xiaohongshu.com/explore/note123?xsec_token=token"
+    security_url = "https://www.xiaohongshu.com/404/security-check"
     state = {
         "note": {
             "noteDetailMap": {
                 "note123": {
                     "note": {
                         "type": "normal",
-                        "title": "图文标题",
+                        "title": "第一跳中的笔记",
                         "imageList": [],
                     }
                 }
             }
         }
     }
-    short_link_requests = []
+    requested_urls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
         if request.url.host == "xhslink.com":
-            short_link_requests.append(str(request.url))
-            if request.url.scheme != "https":
-                return httpx.Response(400, request=request)
             return httpx.Response(
-                302, headers={"Location": page_url}, request=request
+                302, headers={"Location": discovery_url}, request=request
             )
+        if request.url.path == "/discovery/item/note123":
+            return httpx.Response(
+                302, headers={"Location": security_url}, request=request
+            )
+        if request.url.path == "/404/security-check":
+            return httpx.Response(200, text="security page", request=request)
         html = f"<script>window.__INITIAL_STATE__={json.dumps(state)}</script>"
         return httpx.Response(200, text=html, request=request)
 
@@ -61,8 +71,61 @@ async def test_parse_upgrades_http_xhslink_to_https(monkeypatch):
 
     result = await redbook.RedBookParser({}).parse(ParseContext(text=short_url))
 
-    assert result.title == "图文标题"
-    assert short_link_requests == ["https://xhslink.com/o/8ReowhzV8oo"]
+    assert result.title == "第一跳中的笔记"
+    assert requested_urls == [short_url, explore_url]
+
+
+@pytest.mark.asyncio
+async def test_parse_explore_uses_minimal_desktop_headers(monkeypatch):
+    page_url = "https://www.xiaohongshu.com/explore/note123?xsec_token=token"
+    discovery_url = (
+        "https://www.xiaohongshu.com/discovery/item/note123?xsec_token=token"
+    )
+    state = {
+        "note": {
+            "noteDetailMap": {
+                "note123": {
+                    "note": {
+                        "type": "normal",
+                        "title": "桌面页面中的笔记",
+                        "imageList": [],
+                    }
+                }
+            }
+        }
+    }
+    explore_request = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal explore_request
+        if request.url.path.startswith("/explore/"):
+            explore_request = request
+            if "Windows NT" not in request.headers["User-Agent"]:
+                return httpx.Response(
+                    302, headers={"Location": discovery_url}, request=request
+                )
+            html = f"<script>window.__INITIAL_STATE__={json.dumps(state)}</script>"
+            return httpx.Response(200, text=html, request=request)
+        html = "<script>window.__INITIAL_STATE__={\"noteData\": {}}</script>"
+        return httpx.Response(200, text=html, request=request)
+
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        redbook.httpx,
+        "AsyncClient",
+        lambda **kwargs: real_async_client(
+            transport=httpx.MockTransport(handler), **kwargs
+        ),
+    )
+
+    result = await redbook.RedBookParser({}).parse(ParseContext(text=page_url))
+
+    assert result.title == "桌面页面中的笔记"
+    assert explore_request is not None
+    assert "Accept" not in explore_request.headers
+    assert "Origin" not in explore_request.headers
+    assert "X-Requested-With" not in explore_request.headers
+    assert not any(name.startswith("sec-fetch-") for name in explore_request.headers)
 
 
 def test_explore_prefers_h265_video():

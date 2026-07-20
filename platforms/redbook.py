@@ -17,6 +17,14 @@ class RedBookParser(BaseParser):
         r"|xhslink\.com(?:/[^/?\s]+)+"
         r")(?:\?[^\s#]*)?"
     )
+    NOTE_PATH_PATTERN = r"/(?:explore|discovery/item)/(?P<note_id>[^/?]+)"
+    EXPLORE_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/55.0.2883.87 "
+            "UBrowser/6.2.4098.3 Safari/537.36"
+        )
+    }
     HEADERS = {
         "User-Agent": (
             "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
@@ -53,17 +61,16 @@ class RedBookParser(BaseParser):
         ) as client:
             url = match.group(0)
             if (urlparse(url).hostname or "") == "xhslink.com":
-                parsed_short_url = urlsplit(url)
-                if parsed_short_url.scheme == "http":
-                    url = urlunsplit(parsed_short_url._replace(scheme="https"))
-                response = await client.get(url)
-                response.raise_for_status()
-                url = str(response.url)
+                response = await client.get(url, follow_redirects=False)
+                if not response.has_redirect_location:
+                    response.raise_for_status()
+                    raise ValueError("小红书短链未返回重定向地址")
+                url = str(response.url.join(response.headers["Location"]))
+                if (urlparse(url).hostname or "") != "www.xiaohongshu.com":
+                    raise ValueError("小红书短链重定向到不受支持的地址")
 
             parsed_url = urlparse(url)
-            note_match = re.search(
-                r"/(?:explore|discovery/item)/(?P<note_id>[^/?]+)", parsed_url.path
-            )
+            note_match = re.search(self.NOTE_PATH_PATTERN, parsed_url.path)
             if not note_match:
                 raise ValueError("无法从小红书链接中提取笔记 ID")
             note_id = note_match.group("note_id")
@@ -75,7 +82,14 @@ class RedBookParser(BaseParser):
 
             # Explore 页面为首选数据源，访问失败或状态缺失时回退到 Discovery 页面。
             try:
-                response = await client.get(explore_url)
+                original_headers = client.headers.copy()
+                client.headers.clear()
+                client.headers.update(self.EXPLORE_HEADERS)
+                try:
+                    response = await client.get(explore_url)
+                finally:
+                    client.headers.clear()
+                    client.headers.update(original_headers)
                 response.raise_for_status()
                 state = self._extract_initial_state(response.text)
                 result = self._parse_explore_state(state, note_id)
