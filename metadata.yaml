@@ -1,5 +1,5 @@
 name: astrbot_multi_parser
-desc: B站、抖音、小红书等多平台内容解析插件。
-version: v0.1.1
+desc: B站、抖音、小红书、微博、小黑盒、知乎多平台内容解析插件。
+version: v0.2.0
 author: Qfxaile
 repo: "https://github.com/Qfxaile/astrbot_multi_parser"

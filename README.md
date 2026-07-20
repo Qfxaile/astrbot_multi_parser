@@ -3,20 +3,20 @@
 > [!IMPORTANT]
 > 本项目采用纯 AI 编程完成。
 
-> 自动识别聊天消息中的 Bilibili、抖音和小红书链接，并发送作品信息、正文图片或视频。
+> 自动识别聊天消息中的 Bilibili、抖音、小红书、微博、小黑盒和知乎链接，并发送作品信息、正文图片或视频。
 
-![Version](https://img.shields.io/badge/version-v0.1.0-2f6f5e)
+![Version](https://img.shields.io/badge/version-v0.2.0-2f6f5e)
 ![AstrBot Plugin](https://img.shields.io/badge/AstrBot-plugin-4c78a8)
 ![Python](https://img.shields.io/badge/Python-plugin-3776ab)
 
 ## 功能概览
 
 - **自动识别链接**：无需命令，直接发送受支持的链接或分享卡片即可触发解析。
-- **覆盖三大平台**：支持 Bilibili、抖音和小红书的常见视频、图文及短链。
+- **覆盖六个平台**：支持 Bilibili、抖音、小红书、微博、小黑盒和知乎的常见视频、图文及分享链接。
 - **保留原图质量**：图片在内存中下载后以原始字节发送，不主动缩放或转码。
 - **合理组织多图**：图片较多时，在支持的协议端使用合并转发，减少群聊刷屏。
 - **控制视频体积**：发送前探测远程视频大小，超过限制时改为发送解析链接。
-- **按需配置 Cookie**：抖音和小红书 Cookie 均为可选项，可提高部分内容的解析成功率。
+- **按需配置 Cookie**：所有平台 Cookie 均为可选项，可提高受登录态或风控影响内容的解析成功率。
 
 ## 支持范围
 
@@ -25,6 +25,9 @@
 | Bilibili | BV 号、AV 号 | Opus 图文、专栏 | `b23.tv`、`bili2233.cn` | 动态 |
 | 抖音 | 大陆抖音视频 | 普通图文、Slides | `v.douyin.com`、`jx.douyin.com` | 分享页链接 |
 | 小红书 | 视频笔记 | 图文笔记 | `xhslink.com` | 部分 JSON 分享卡片 |
+| 微博 | 普通视频、微博视频页、TV | 普通微博、转发微博、长文章 | `mapp.api.weibo.cn` | 桌面端和移动端微博 |
+| 小黑盒 | 帖子视频、游戏视频 | 社区帖子、游戏截图 | BBS/API 分享链接 | 游戏简介、评分与价格 |
+| 知乎 | 正文内视频 | 问题、回答、专栏文章、想法 | `link.zhihu.com` | 页面数据回退解析 |
 
 > [!NOTE]
 > 当前不支持 TikTok，也不解析 Bilibili 音频、独立音轨或 `au` 号。
@@ -65,6 +68,9 @@ flowchart LR
 https://www.bilibili.com/video/BV...
 https://v.douyin.com/...
 https://www.xiaohongshu.com/explore/...
+https://weibo.com/1234567890/ABCDEF
+https://www.xiaoheihe.cn/app/bbs/link/...
+https://www.zhihu.com/question/123456789
 ```
 
 ## 配置说明
@@ -73,9 +79,12 @@ https://www.xiaohongshu.com/explore/...
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `enabled_platforms` | 列表 | `bilibili`、`douyin`、`redbook` | 需要启用的解析器 |
+| `enabled_platforms` | 列表 | 六个平台全部启用 | 需要启用的解析器 |
 | `douyin_cookies` | 文本 | 空 | 可选；缺少 `ttwid` 时会尝试注册匿名会话 |
 | `redbook_cookies` | 文本 | 空 | 可选；可提高部分内容或无水印资源的可用性 |
+| `weibo_cookies` | 文本 | 空 | 可选；用于需要登录态的微博页面请求 |
+| `xiaoheihe_cookies` | 文本 | 空 | 可选；未配置时自动申请匿名设备令牌 |
+| `zhihu_cookies` | 文本 | 空 | 可选；用于知乎页面和接口请求 |
 | `request_timeout_seconds` | 整数 | `30` | 平台页面和接口请求超时，单位为秒 |
 | `send_video_by_url` | 布尔值 | `true` | 是否通过远程 URL 直接发送解析到的视频 |
 | `max_video_size_mb` | 浮点数 | `50` | 视频直发体积上限，单位为 MB；小于等于 `0` 表示不限制 |
@@ -177,7 +186,8 @@ https://www.xiaohongshu.com/explore/...
 
 ## 安全与隐私
 
-- 抖音和小红书 Cookie 只设置到对应平台域，不会随跨域图片 CDN 请求发送。
+- 各平台 Cookie 仅随对应平台域请求发送，不会带到分享跳转目标或跨域图片 CDN。
+- 小黑盒未配置 Cookie 时会向其设备指纹服务申请匿名设备 ID，不会上传聊天内容或用户凭据。
 - 图片地址必须使用 HTTP(S)、默认端口和受信任的平台域名；私有地址及不安全重定向会被拒绝。
 - 图片重定向最多跟随 5 次，并在每次跳转前重新校验目标地址。
 - 图片错误日志仅记录主机名和错误摘要，避免泄漏带令牌的完整 URL。
@@ -193,10 +203,14 @@ astrbot_multi_parser/
 ├── platforms/
 │   ├── bilibili.py         # Bilibili 解析器
 │   ├── douyin.py           # 抖音解析器
-│   └── redbook.py          # 小红书解析器
+│   ├── redbook.py          # 小红书解析器
+│   ├── weibo.py            # 微博解析器
+│   ├── xiaoheihe.py        # 小黑盒解析器
+│   └── zhihu/              # 知乎解析器包
 ├── tests/                  # pytest 测试
 ├── _conf_schema.json       # AstrBot 插件配置定义
 ├── metadata.yaml           # 插件元数据
+├── THIRD_PARTY_NOTICES.md  # 第三方代码归属与许可证
 └── requirements.txt        # Python 依赖
 ```
 
