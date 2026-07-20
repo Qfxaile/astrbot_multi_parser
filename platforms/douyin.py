@@ -257,20 +257,20 @@ class DouyinParser(BaseParser):
 
     @classmethod
     def _select_image_url(cls, image: object) -> str:
-        """在不遍历异常容器的前提下选择并校验图片候选地址。
+        """选择首个安全且不含抖音水印转换标记的图片地址。
 
         参数:
-            image: 包含下载或展示 URL 列表的外部图片对象。
+            image: 包含展示或下载 URL 列表的外部图片对象。
 
         返回:
-            第一个非空候选地址；遇到不安全 URL 时返回无效标记；对象中没有字符串候选时
-            返回空字符串。
+            首个安全的无水印候选；仅存在无效或带水印候选时返回无效标记；
+            对象中没有字符串候选时返回空字符串。
         """
         if not isinstance(image, dict):
             return ""
         failure_candidate = ""
-        # 优先使用下载地址；每个外部容器和候选值都先校验类型与 URL 安全属性。
-        for field_name in ("download_url_list", "url_list"):
+        # 展示地址不含作者水印；下载地址仅作为非水印回退。
+        for field_name in ("url_list", "download_url_list"):
             candidates = image.get(field_name)
             if not isinstance(candidates, list):
                 continue
@@ -290,6 +290,9 @@ class DouyinParser(BaseParser):
                     or parsed.password is not None
                     or port not in {None, 80, 443}
                 ):
+                    failure_candidate = failure_candidate or cls.INVALID_IMAGE_URL
+                    continue
+                if "-water:" in parsed.path:
                     failure_candidate = failure_candidate or cls.INVALID_IMAGE_URL
                     continue
                 return candidate

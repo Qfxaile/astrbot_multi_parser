@@ -32,17 +32,19 @@ def test_router_data_parses_image_note():
                             "author": {"nickname": "作者"},
                             "images": [
                                 {
-                                    "download_url_list": [
-                                        "",
-                                        "https://img.example/original-1.jpg",
-                                    ],
-                                    "url_list": ["https://img.example/thumb-1.jpg"],
-                                },
-                                {
-                                    "download_url_list": [""],
                                     "url_list": [
                                         "",
-                                        "https://img.example/fallback-2.jpg",
+                                        "https://img.example/original-1.webp",
+                                    ],
+                                    "download_url_list": [
+                                        "https://img.example/original-1-water:1080:1440.webp"
+                                    ],
+                                },
+                                {
+                                    "url_list": [""],
+                                    "download_url_list": [
+                                        "",
+                                        "https://img.example/fallback-2.webp",
                                     ],
                                 },
                             ],
@@ -58,8 +60,8 @@ def test_router_data_parses_image_note():
     assert result.title == "图文标题"
     assert result.author == "作者"
     assert result.image_urls == [
-        "https://img.example/original-1.jpg",
-        "https://img.example/fallback-2.jpg",
+        "https://img.example/original-1.webp",
+        "https://img.example/fallback-2.webp",
     ]
     assert result.video_url == ""
 
@@ -104,11 +106,13 @@ def test_slides_data_keeps_static_image_order():
                 "author": {"nickname": "作者"},
                 "images": [
                     {
-                        "download_url_list": [
+                        "url_list": [
                             "",
-                            "https://img.example/original-1.jpg",
+                            "https://img.example/original-1.webp",
                         ],
-                        "url_list": ["https://img.example/thumb-1.jpg"],
+                        "download_url_list": [
+                            "https://img.example/original-1-water:1080:1440.webp"
+                        ],
                         "video": {
                             "play_addr": {
                                 "url_list": ["https://video.example/effect.mp4"]
@@ -116,8 +120,10 @@ def test_slides_data_keeps_static_image_order():
                         },
                     },
                     {
-                        "download_url_list": [],
-                        "url_list": ["", "https://img.example/fallback-2.jpg"],
+                        "url_list": [],
+                        "download_url_list": [
+                            "https://img.example/fallback-2.webp"
+                        ],
                     },
                 ],
             }
@@ -127,8 +133,8 @@ def test_slides_data_keeps_static_image_order():
     result = douyin.DouyinParser({})._parse_slides_data(payload)
 
     assert result.image_urls == [
-        "https://img.example/original-1.jpg",
-        "https://img.example/fallback-2.jpg",
+        "https://img.example/original-1.webp",
+        "https://img.example/fallback-2.webp",
     ]
     assert result.video_url == ""
 
@@ -169,8 +175,10 @@ async def test_parse_materializes_images_without_leaking_douyin_cookies(monkeypa
                             "author": {"nickname": "作者"},
                             "images": [
                                 {
-                                    "download_url_list": [image_url],
-                                    "url_list": ["https://img.example/thumb.webp"],
+                                    "url_list": [image_url],
+                                    "download_url_list": [
+                                        "https://p3-sign.douyinpic.com/image-water:1080:1440.webp"
+                                    ],
                                 }
                             ],
                         }
@@ -337,16 +345,20 @@ async def test_parse_slides_materializes_original_candidates_in_place(monkeypatc
                 "author": {"nickname": "作者"},
                 "images": [
                     {
-                        "download_url_list": ["", original_url],
-                        "url_list": ["https://thumb.example/1.webp"],
+                        "url_list": ["", original_url],
+                        "download_url_list": [
+                            "https://p3-sign.douyinpic.com/original-1-water:1080:1440.webp"
+                        ],
                     },
                     {
-                        "download_url_list": [""],
-                        "url_list": ["", fallback_url],
+                        "url_list": [""],
+                        "download_url_list": ["", fallback_url],
                     },
                     {
-                        "download_url_list": [failed_url],
-                        "url_list": ["https://thumb.example/failed.webp"],
+                        "url_list": [failed_url],
+                        "download_url_list": [
+                            "https://p9-sign.douyinpic.com/original-failed-water:1080:1440.webp"
+                        ],
                     },
                 ],
             }
@@ -490,24 +502,54 @@ def test_douyin_image_payloads_ignore_string_containers_and_mixed_elements():
     assert slides_result.author == "未知作者"
 
 
+def test_douyin_image_candidates_prefer_unwatermarked_url_list():
+    image = {
+        "url_list": [
+            "https://p3-sign.douyinpic.com/source~tplv-dy-lqen-new:1080:1440:q80.webp"
+        ],
+        "download_url_list": [
+            "https://p3-sign.douyinpic.com/source~tplv-dy-lqen-new-water:1080:1440:user:q80.webp"
+        ],
+    }
+
+    selected = douyin.DouyinParser._select_image_url(image)
+
+    assert selected == image["url_list"][0]
+
+
+def test_douyin_image_candidates_reject_watermarked_only_urls():
+    image = {
+        "url_list": [],
+        "download_url_list": [
+            "https://p3-sign.douyinpic.com/source~tplv-dy-lqen-new-water:1080:1440:user:q80.webp"
+        ],
+    }
+
+    selected = douyin.DouyinParser._select_image_url(image)
+
+    assert selected == douyin.DouyinParser.INVALID_IMAGE_URL
+
+
 def test_douyin_image_candidates_continue_after_unsafe_values():
     payload = {
         "aweme_details": [
             {
                 "images": [
                     {
-                        "download_url_list": [
+                        "url_list": [
                             "https://user:secret@img.example/private.webp",
                             "http://[::1/private.webp",
-                            "https://img.example/original-after-unsafe.webp",
+                            "https://img.example/source-water:1080:1440.webp",
                         ],
-                        "url_list": ["https://thumb.example/not-selected.webp"],
+                        "download_url_list": [
+                            "https://img.example/original-after-unsafe.webp"
+                        ],
                     },
                     {
-                        "download_url_list": [
+                        "url_list": [
                             "https://img.example:8080/private.webp"
                         ],
-                        "url_list": [
+                        "download_url_list": [
                             "https://img.example/original-fallback.webp"
                         ],
                     },
