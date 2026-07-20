@@ -205,7 +205,7 @@ async def test_two_images_keep_legacy_info_chain_order(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_exactly_three_images_repeat_summary_as_first_forward_node(
+async def test_exactly_three_images_are_sent_as_one_forward_message(
     monkeypatch,
 ):
     result = ParseResult(
@@ -216,17 +216,14 @@ async def test_exactly_three_images_repeat_summary_as_first_forward_node(
 
     messages = await collect_results(monkeypatch, result)
 
-    assert len(messages) == 2
+    assert len(messages) == 1
     assert len(messages[0]) == 1
-    assert isinstance(messages[0][0], Plain)
-    assert not any(isinstance(component, Image) for component in messages[0])
-    assert len(messages[1]) == 1
-    assert isinstance(messages[1][0], Nodes)
-    nodes = messages[1][0].nodes
+    assert isinstance(messages[0][0], Nodes)
+    nodes = messages[0][0].nodes
     assert len(nodes) == 4
     assert all(isinstance(node, Node) and len(node.content) == 1 for node in nodes)
     assert isinstance(nodes[0].content[0], Plain)
-    assert nodes[0].content[0].text == messages[0][0].text == "标题"
+    assert nodes[0].content[0].text == "标题"
     assert all(isinstance(node.content[0], Image) for node in nodes[1:])
 
 
@@ -279,7 +276,7 @@ async def test_ordered_text_success_failure_success_preserves_component_order(
 
     messages = await collect_results(monkeypatch, result)
 
-    nodes = messages[1][0].nodes
+    nodes = messages[0][0].nodes
     assert [type(node.content[0]) for node in nodes] == [
         Plain,
         Plain,
@@ -374,7 +371,12 @@ async def test_unsupported_or_empty_platform_keeps_one_normal_chain(
     )
     event = FakeEvent(platform_name=platform_name)
 
-    messages = await collect_results(monkeypatch, result, event=event)
+    messages = await collect_results(
+        monkeypatch,
+        result,
+        event=event,
+        forward_mode="always",
+    )
 
     assert len(messages) == 1
     assert [type(component) for component in messages[0]] == [
@@ -400,8 +402,147 @@ async def test_satori_supports_forward_nodes(monkeypatch):
         event=FakeEvent(platform_name="satori"),
     )
 
-    assert len(messages) == 2
-    assert isinstance(messages[1][0], Nodes)
+    assert len(messages) == 1
+    assert isinstance(messages[0][0], Nodes)
+
+
+@pytest.mark.asyncio
+async def test_always_mode_forwards_text_only_result(monkeypatch):
+    messages = await collect_results(
+        monkeypatch,
+        ParseResult(platform="test", title="标题"),
+        forward_mode="always",
+    )
+
+    assert len(messages) == 1
+    assert isinstance(messages[0][0], Nodes)
+    assert messages[0][0].nodes[0].content[0].text == "标题"
+
+
+@pytest.mark.asyncio
+async def test_never_mode_keeps_many_images_in_normal_chain(monkeypatch):
+    result = ParseResult(
+        platform="test",
+        title="标题",
+        image_urls=["base64://1", "base64://2", "base64://3"],
+    )
+
+    messages = await collect_results(monkeypatch, result, forward_mode="never")
+
+    assert len(messages) == 1
+    assert [type(component) for component in messages[0]] == [
+        Image,
+        Image,
+        Image,
+        Plain,
+    ]
+    assert not any(isinstance(component, Nodes) for component in messages[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("length", "should_forward"), [(200, False), (201, True)])
+async def test_text_threshold_is_strictly_greater(
+    monkeypatch, length, should_forward
+):
+    messages = await collect_results(
+        monkeypatch,
+        ParseResult(platform="test", title="字" * length),
+        forward_mode="threshold",
+        forward_image_threshold=99,
+        forward_text_threshold=200,
+    )
+
+    assert isinstance(messages[0][0], Nodes) is should_forward
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("count", "should_forward"), [(2, False), (3, True)])
+async def test_image_threshold_is_strictly_greater(
+    monkeypatch, count, should_forward
+):
+    result = ParseResult(
+        platform="test",
+        image_urls=[f"base64://{index}" for index in range(count)],
+    )
+
+    messages = await collect_results(
+        monkeypatch,
+        result,
+        forward_mode="threshold",
+        forward_image_threshold=2,
+        forward_text_threshold=999,
+    )
+
+    assert isinstance(messages[0][0], Nodes) is should_forward
+
+
+@pytest.mark.asyncio
+async def test_text_threshold_counts_summary_and_ordered_body(monkeypatch):
+    result = ParseResult(
+        platform="test",
+        title="题" * 100,
+        ordered_contents=[OrderedContent("text", "文" * 101)],
+    )
+
+    messages = await collect_results(
+        monkeypatch,
+        result,
+        forward_mode="threshold",
+        forward_image_threshold=99,
+        forward_text_threshold=200,
+    )
+
+    assert isinstance(messages[0][0], Nodes)
+
+
+@pytest.mark.asyncio
+async def test_invalid_forward_mode_falls_back_to_threshold(monkeypatch):
+    result = ParseResult(
+        platform="test",
+        image_urls=["base64://1", "base64://2", "base64://3"],
+    )
+
+    messages = await collect_results(
+        monkeypatch,
+        result,
+        forward_mode="unexpected",
+    )
+
+    assert isinstance(messages[0][0], Nodes)
+
+
+@pytest.mark.asyncio
+async def test_invalid_thresholds_fall_back_to_defaults(monkeypatch):
+    result = ParseResult(
+        platform="test",
+        title="字" * 200,
+        image_urls=["base64://1", "base64://2"],
+    )
+
+    messages = await collect_results(
+        monkeypatch,
+        result,
+        forward_mode="threshold",
+        forward_image_threshold="invalid",
+        forward_text_threshold=None,
+    )
+
+    assert not any(isinstance(component, Nodes) for component in messages[0])
+
+
+@pytest.mark.asyncio
+async def test_negative_thresholds_are_treated_as_zero(monkeypatch):
+    result = ParseResult(platform="test", image_urls=["base64://1"])
+
+    messages = await collect_results(
+        monkeypatch,
+        result,
+        forward_mode="threshold",
+        forward_image_threshold=-1,
+        forward_text_threshold=-1,
+    )
+
+    assert isinstance(messages[0][0], Nodes)
 
 
 @pytest.mark.asyncio
@@ -424,11 +565,10 @@ async def test_forward_images_are_followed_by_existing_video_flow(monkeypatch):
 
     messages = [item async for item in plugin.handle_parse(FakeEvent())]
 
-    assert len(messages) == 3
-    assert isinstance(messages[0][0], Plain)
-    assert isinstance(messages[1][0], Nodes)
-    assert isinstance(messages[2][0], Video)
-    assert "视频链接" not in messages[0][0].text
+    assert len(messages) == 2
+    assert isinstance(messages[0][0], Nodes)
+    assert isinstance(messages[1][0], Video)
+    assert "视频链接" not in messages[0][0].nodes[0].content[0].text
 
 
 @pytest.mark.asyncio
@@ -454,9 +594,8 @@ async def test_video_url_is_only_in_summary_when_direct_send_is_disabled(
 
     messages = [item async for item in plugin.handle_parse(FakeEvent())]
 
-    assert len(messages) == 2
-    assert "视频链接: https://example.com/video.mp4" in messages[0][0].text
-    nodes = messages[1][0].nodes
+    assert len(messages) == 1
+    nodes = messages[0][0].nodes
     assert "视频链接: https://example.com/video.mp4" in nodes[0].content[0].text
     assert all(
         "视频链接" not in node.content[0].text

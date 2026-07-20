@@ -53,6 +53,26 @@
     "default": false,
     "invisible": true
   },
+  "forward_mode": {
+    "description": "内容发送方式",
+    "type": "string",
+    "default": "threshold",
+    "options": ["always", "threshold", "never"],
+    "labels": ["始终合并发送", "超过阈值时合并发送", "始终不合并发送（不推荐 ×）"],
+    "hint": "选择解析内容使用普通消息还是合并转发；不支持合并转发的平台会自动使用普通消息。"
+  },
+  "forward_image_threshold": {
+    "description": "图片合并阈值",
+    "type": "int",
+    "default": 2,
+    "hint": "阈值模式下，图片数量严格超过该值时合并发送。"
+  },
+  "forward_text_threshold": {
+    "description": "文字合并阈值",
+    "type": "int",
+    "default": 200,
+    "hint": "阈值模式下，最终可见文字字符数严格超过该值时合并发送。"
+  },
   "request_timeout_seconds": {
     "description": "请求超时",
     "type": "int",

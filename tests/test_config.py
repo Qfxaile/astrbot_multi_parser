@@ -63,3 +63,20 @@ def test_video_send_decision_defaults_limit_to_50_mb():
 
     assert should_send is False
     assert "超过限制 50.00 MB" in reason
+
+
+def test_schema_exposes_forward_delivery_modes_and_thresholds():
+    schema_path = Path(__file__).parents[1] / "_conf_schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+    mode = schema["forward_mode"]
+    assert mode["type"] == "string"
+    assert mode["default"] == "threshold"
+    assert mode["options"] == ["always", "threshold", "never"]
+    assert mode["labels"] == [
+        "始终合并发送",
+        "超过阈值时合并发送",
+        "始终不合并发送（不推荐 ×）",
+    ]
+    assert schema["forward_image_threshold"]["default"] == 2
+    assert schema["forward_text_threshold"]["default"] == 200

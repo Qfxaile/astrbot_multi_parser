@@ -2,7 +2,7 @@ from collections.abc import Mapping
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
-from astrbot.api.message_components import Node, Nodes
+from astrbot.api.message_components import Node, Nodes, Plain
 
 from ..core.contracts import ParseResult
 
@@ -11,6 +11,10 @@ class DeliveryService:
     """封装 AstrBot 消息组件编排与 OneBot 平台调用。"""
 
     FORWARD_NODE_PLATFORMS = {"aiocqhttp", "satori"}
+    FORWARD_MODES = {"always", "threshold", "never"}
+    DEFAULT_FORWARD_MODE = "threshold"
+    DEFAULT_IMAGE_THRESHOLD = 2
+    DEFAULT_TEXT_THRESHOLD = 200
 
     def __init__(self, config: Mapping[str, object]) -> None:
         self.config = config
@@ -62,9 +66,11 @@ class DeliveryService:
         *,
         include_video_url: bool,
     ) -> list:
-        if result.image_count < 3 or not self._supports_forward_nodes(event):
-            info_chain = result.info_chain(include_video_url=include_video_url)
-            return [event.chain_result(info_chain)] if info_chain else []
+        info_chain = result.info_chain(include_video_url=include_video_url)
+        if not info_chain:
+            return []
+        if not self._should_forward_content(event, result, info_chain):
+            return [event.chain_result(info_chain)]
 
         summary_chain = result.info_chain(
             include_content=False,
@@ -74,22 +80,53 @@ class DeliveryService:
             include_summary=False,
             include_video_url=include_video_url,
         )
-        messages = []
-        if summary_chain:
-            messages.append(event.chain_result(summary_chain))
-        if content_chain:
-            sender_name, sender_id = self.sender_identity(event)
-            nodes = []
-            if summary_chain:
-                nodes.append(
-                    Node(content=summary_chain, name=sender_name, uin=sender_id)
-                )
-            nodes.extend(
-                Node(content=[component], name=sender_name, uin=sender_id)
-                for component in content_chain
-            )
-            messages.append(event.chain_result([Nodes(nodes)]))
-        return messages
+        sender_name, sender_id = self.sender_identity(event)
+        nodes = [
+            Node(content=[component], name=sender_name, uin=sender_id)
+            for component in [*summary_chain, *content_chain]
+        ]
+        return [event.chain_result([Nodes(nodes)])]
+
+    def _should_forward_content(
+        self,
+        event: AstrMessageEvent,
+        result: ParseResult,
+        chain: list,
+    ) -> bool:
+        if not self._supports_forward_nodes(event):
+            return False
+
+        mode = str(
+            self.config.get("forward_mode", self.DEFAULT_FORWARD_MODE)
+        ).strip().lower()
+        if mode not in self.FORWARD_MODES:
+            mode = self.DEFAULT_FORWARD_MODE
+        if mode == "always":
+            return True
+        if mode == "never":
+            return False
+
+        image_threshold = self._non_negative_int(
+            self.config.get(
+                "forward_image_threshold", self.DEFAULT_IMAGE_THRESHOLD
+            ),
+            self.DEFAULT_IMAGE_THRESHOLD,
+        )
+        text_threshold = self._non_negative_int(
+            self.config.get("forward_text_threshold", self.DEFAULT_TEXT_THRESHOLD),
+            self.DEFAULT_TEXT_THRESHOLD,
+        )
+        text_length = sum(
+            len(component.text) for component in chain if isinstance(component, Plain)
+        )
+        return result.image_count > image_threshold or text_length > text_threshold
+
+    @staticmethod
+    def _non_negative_int(value: object, default: int) -> int:
+        try:
+            return max(int(value), 0)
+        except (TypeError, ValueError):
+            return default
 
     async def send_forward_links(
         self, event: AstrMessageEvent, result: ParseResult, reason: str
