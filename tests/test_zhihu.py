@@ -1,3 +1,9 @@
+import base64
+import json
+from types import SimpleNamespace
+from urllib.parse import quote
+
+import httpx
 import pytest
 
 from astrbot_multi_parser.models import OrderedContent, ParseContext
@@ -16,6 +22,7 @@ from astrbot_multi_parser.platforms.zhihu.handlers import (
     parse_pin_payload,
     parse_question_payload,
 )
+from astrbot_multi_parser.platforms.zhihu import request as zhihu_request
 
 
 def test_normalize_text_decodes_entities_and_compacts_whitespace():
@@ -227,3 +234,237 @@ def test_pin_payload_handles_structured_text_image_and_video():
 def test_handlers_reject_empty_payloads(handler, payload, message):
     with pytest.raises(ValueError, match=message):
         handler(payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.zhihu.com/question/1",
+        "https://www.zhihu.com/question/1/answer/2",
+        "https://zhuanlan.zhihu.com/p/3",
+        "https://www.zhihu.com/pin/4",
+        "https://www.zhihu.com/tardis/zm/art/5",
+        "https://link.zhihu.com/?target=https%3A%2F%2Fwww.zhihu.com%2Fquestion%2F1",
+    ],
+)
+async def test_matches_supported_zhihu_urls(url):
+    from astrbot_multi_parser.platforms import ZhihuParser
+
+    assert await ZhihuParser({}).match(ParseContext(text=url))
+
+
+@pytest.mark.asyncio
+async def test_rejects_lookalike_zhihu_url():
+    from astrbot_multi_parser.platforms import ZhihuParser
+
+    assert not await ZhihuParser({}).match(
+        ParseContext(text="https://zhihu.com.evil.example/question/1")
+    )
+
+
+def install_zhihu_mock_client(monkeypatch, handler):
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        zhihu_request,
+        "httpx",
+        SimpleNamespace(
+            AsyncClient=lambda **kwargs: real_async_client(
+                transport=httpx.MockTransport(handler), **kwargs
+            )
+        ),
+        raising=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_parse_answer_uses_cookie_only_for_zhihu_and_materializes_image(
+    monkeypatch,
+):
+    from astrbot_multi_parser.platforms import ZhihuParser
+
+    image_bytes = b"answer-image"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "www.zhihu.com":
+            assert request.url.path == "/api/v4/answers/2"
+            assert "z_c0=secret" in request.headers.get("cookie", "")
+            return httpx.Response(
+                200,
+                json={
+                    "question": {"title": "接口问题"},
+                    "author": {"name": "接口答主"},
+                    "content": '<img src="https://picx.zhimg.com/a.jpg">',
+                },
+                request=request,
+            )
+        assert request.url.host == "picx.zhimg.com"
+        assert "cookie" not in request.headers
+        return httpx.Response(200, content=image_bytes, request=request)
+
+    install_zhihu_mock_client(monkeypatch, handler)
+    result = await ZhihuParser({"zhihu_cookies": "z_c0=secret"}).parse(
+        ParseContext(text="https://www.zhihu.com/question/1/answer/2")
+    )
+
+    assert result.title == "接口问题"
+    assert result.author == "接口答主"
+    assert result.ordered_contents[0].value == (
+        f"base64://{base64.b64encode(image_bytes).decode()}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_parse_question_fetches_default_first_answer(monkeypatch):
+    from astrbot_multi_parser.platforms import ZhihuParser
+
+    requested_paths = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_paths.append(request.url.path)
+        if request.url.path == "/api/v4/questions/1":
+            return httpx.Response(
+                200,
+                json={"title": "接口问题", "detail": "<p>问题描述</p>"},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "author": {"name": "首答作者"},
+                        "content": "<p>首条回答</p>",
+                    }
+                ]
+            },
+            request=request,
+        )
+
+    install_zhihu_mock_client(monkeypatch, handler)
+    result = await ZhihuParser({}).parse(
+        ParseContext(text="https://www.zhihu.com/question/1")
+    )
+
+    assert requested_paths == [
+        "/api/v4/questions/1",
+        "/api/v4/questions/1/answers",
+    ]
+    assert result.author == "首答作者"
+    assert result.ordered_contents[-1].value == "首条回答"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url", "api_path", "payload", "expected_title"),
+    [
+        (
+            "https://www.zhihu.com/tardis/zm/art/5",
+            "/api/v4/articles/5",
+            {"title": "移动文章", "author": {"name": "作者"}, "content": "正文"},
+            "移动文章",
+        ),
+        (
+            "https://www.zhihu.com/pin/4",
+            "/api/v4/pins/4",
+            {"author": {"name": "作者"}, "content": [{"type": "text", "content": "想法"}]},
+            "知乎想法",
+        ),
+    ],
+)
+async def test_parse_routes_article_and_pin(
+    monkeypatch, url, api_path, payload, expected_title
+):
+    from astrbot_multi_parser.platforms import ZhihuParser
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == api_path
+        return httpx.Response(200, json=payload, request=request)
+
+    install_zhihu_mock_client(monkeypatch, handler)
+
+    result = await ZhihuParser({}).parse(ParseContext(text=url))
+
+    assert result.title == expected_title
+
+
+@pytest.mark.asyncio
+async def test_parse_share_follows_trusted_redirect(monkeypatch):
+    from astrbot_multi_parser.platforms import ZhihuParser
+
+    target = "https://www.zhihu.com/question/1/answer/2"
+    share_url = f"https://link.zhihu.com/?target={quote(target, safe='')}"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "link.zhihu.com":
+            return httpx.Response(302, headers={"Location": target}, request=request)
+        if request.url.path == "/question/1/answer/2":
+            return httpx.Response(200, text="answer page", request=request)
+        return httpx.Response(
+            200,
+            json={
+                "question": {"title": "跳转问题"},
+                "author": {"name": "跳转答主"},
+                "content": "回答",
+            },
+            request=request,
+        )
+
+    install_zhihu_mock_client(monkeypatch, handler)
+    result = await ZhihuParser({}).parse(ParseContext(text=share_url))
+
+    assert result.title == "跳转问题"
+
+
+@pytest.mark.asyncio
+async def test_parse_share_rejects_untrusted_redirect(monkeypatch):
+    from astrbot_multi_parser.platforms import ZhihuParser
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "link.zhihu.com":
+            return httpx.Response(
+                302,
+                headers={"Location": "https://evil.example/question/1"},
+                request=request,
+            )
+        return httpx.Response(200, text="evil", request=request)
+
+    install_zhihu_mock_client(monkeypatch, handler)
+
+    with pytest.raises(ValueError, match="不可信域名"):
+        await ZhihuParser({}).parse(
+            ParseContext(text="https://link.zhihu.com/?target=ignored")
+        )
+
+
+@pytest.mark.asyncio
+async def test_answer_api_risk_control_falls_back_to_initial_state(monkeypatch):
+    from astrbot_multi_parser.platforms import ZhihuParser
+
+    answer = {
+        "question": {"title": "页面问题"},
+        "author": {"name": "页面答主"},
+        "content": "<p>页面回答</p>",
+    }
+    state = {"initialState": {"entities": {"answers": {"2": answer}}}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v4/answers/2":
+            return httpx.Response(403, text="blocked", request=request)
+        return httpx.Response(
+            200,
+            text=(
+                '<script id="js-initialData" type="application/json">'
+                f"{json.dumps(state)}"
+                "</script>"
+            ),
+            request=request,
+        )
+
+    install_zhihu_mock_client(monkeypatch, handler)
+    result = await ZhihuParser({}).parse(
+        ParseContext(text="https://www.zhihu.com/question/1/answer/2")
+    )
+
+    assert result.title == "页面问题"
+    assert result.author == "页面答主"
