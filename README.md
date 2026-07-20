@@ -3,16 +3,16 @@
 > [!IMPORTANT]
 > 本项目采用纯 AI 编程完成。
 
-> 自动识别聊天消息中的 Bilibili、抖音、小红书、微博、小黑盒和知乎链接，并发送作品信息、正文图片或视频。
+> 自动识别聊天消息中的 Bilibili、抖音、小红书、贴吧、微博、小黑盒和知乎链接，并发送作品信息、正文图片或视频。
 
-![Version](https://img.shields.io/badge/version-v0.2.0-2f6f5e)
+![Version](https://img.shields.io/badge/version-v0.3.0-2f6f5e)
 ![AstrBot Plugin](https://img.shields.io/badge/AstrBot-plugin-4c78a8)
 ![Python](https://img.shields.io/badge/Python-plugin-3776ab)
 
 ## 功能概览
 
 - **自动识别链接**：无需命令，直接发送受支持的链接或分享卡片即可触发解析。
-- **覆盖六个平台**：支持 Bilibili、抖音、小红书、微博、小黑盒和知乎的常见视频、图文及分享链接。
+- **覆盖七个平台**：支持 Bilibili、抖音、小红书、贴吧、微博、小黑盒和知乎的常见视频、图文及分享链接。
 - **保留原图质量**：图片在内存中下载后以原始字节发送，不主动缩放或转码。
 - **合理组织多图**：图片较多时，在支持的协议端使用合并转发，减少群聊刷屏。
 - **控制视频体积**：发送前探测远程视频大小，超过限制时改为发送解析链接。
@@ -25,6 +25,7 @@
 | Bilibili | BV 号、AV 号 | Opus 图文、专栏 | `b23.tv`、`bili2233.cn` | 动态 |
 | 抖音 | 大陆抖音视频 | 普通图文、Slides | `v.douyin.com`、`jx.douyin.com` | 分享页链接 |
 | 小红书 | 视频笔记 | 图文笔记 | `xhslink.com` | 部分 JSON 分享卡片 |
+| 贴吧 | 首帖视频 | 楼主首帖正文 | - | `tieba.baidu.com/p/<帖子ID>` |
 | 微博 | 普通视频、微博视频页、TV | 普通微博、转发微博、长文章 | `mapp.api.weibo.cn` | 桌面端和移动端微博 |
 | 小黑盒 | 帖子视频、游戏视频 | 社区帖子、游戏截图 | BBS/API 分享链接 | 游戏简介、评分与价格 |
 | 知乎 | 正文内视频 | 问题、回答、专栏文章、想法 | `link.zhihu.com` | 页面数据回退解析 |
@@ -46,7 +47,7 @@
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `platform_switches` | 对象（布尔开关） | 六个平台全部启用 | 分别控制 B站、抖音、小红书、微博、小黑盒和知乎解析器 |
+| `platform_switches` | 对象（布尔开关） | 七个平台全部启用 | 分别控制 B站、抖音、小红书、贴吧、微博、小黑盒和知乎解析器 |
 | `request_timeout_seconds` | 整数 | `30` | 平台页面和接口请求超时，单位为秒 |
 | `send_video_by_url` | 布尔值 | `true` | 是否通过远程 URL 直接发送解析到的视频 |
 | `max_video_size_mb` | 浮点数 | `50` | 视频直发体积上限，单位为 MB；小于等于 `0` 表示不限制 |
@@ -57,6 +58,7 @@
 | `reaction_emoji_id` | 字符串 | `124` | 表情回应使用的表情 ID |
 | `douyin_cookies` | 文本 | 空 | 可选；缺少 `ttwid` 时会尝试注册匿名会话 |
 | `redbook_cookies` | 文本 | 空 | 可选；可提高部分内容或无水印资源的可用性 |
+| `tieba_cookies` | 文本 | 空 | 可选；用于贴吧页面请求，可降低安全验证导致的解析失败 |
 | `weibo_cookies` | 文本 | 空 | 可选；用于需要登录态的微博页面请求 |
 | `xiaoheihe_cookies` | 文本 | 空 | 可选；未配置时自动申请匿名设备令牌 |
 | `zhihu_cookies` | 文本 | 空 | 可选；用于知乎页面和接口请求 |
@@ -145,6 +147,7 @@ astrbot_multi_parser/
 │   ├── bilibili.py         # Bilibili 解析器
 │   ├── douyin.py           # 抖音解析器
 │   ├── redbook.py          # 小红书解析器
+│   ├── tieba.py            # 贴吧解析器
 │   ├── weibo.py            # 微博解析器
 │   ├── xiaoheihe.py        # 小黑盒解析器
 │   └── zhihu/              # 知乎解析器包

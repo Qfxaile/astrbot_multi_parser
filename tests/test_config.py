@@ -1,10 +1,19 @@
 import json
 from pathlib import Path
 
-PLATFORMS = ("bilibili", "douyin", "redbook", "weibo", "xiaoheihe", "zhihu")
+PLATFORMS = (
+    "bilibili",
+    "douyin",
+    "redbook",
+    "tieba",
+    "weibo",
+    "xiaoheihe",
+    "zhihu",
+)
 COOKIE_KEYS = (
     "douyin_cookies",
     "redbook_cookies",
+    "tieba_cookies",
     "weibo_cookies",
     "xiaoheihe_cookies",
     "zhihu_cookies",

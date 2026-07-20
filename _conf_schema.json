@@ -19,6 +19,11 @@
         "type": "bool",
         "default": true
       },
+      "tieba": {
+        "description": "贴吧",
+        "type": "bool",
+        "default": true
+      },
       "weibo": {
         "description": "微博",
         "type": "bool",
@@ -39,7 +44,7 @@
   "enabled_platforms": {
     "description": "旧版启用平台",
     "type": "list",
-    "default": ["bilibili", "douyin", "redbook", "weibo", "xiaoheihe", "zhihu"],
+    "default": ["bilibili", "douyin", "redbook", "tieba", "weibo", "xiaoheihe", "zhihu"],
     "invisible": true
   },
   "platform_switches_migrated": {
@@ -107,6 +112,12 @@
     "type": "text",
     "default": "",
     "hint": "选填。部分内容配置 Cookies 后更容易获得可用或无水印资源。"
+  },
+  "tieba_cookies": {
+    "description": "贴吧 Cookies",
+    "type": "text",
+    "default": "",
+    "hint": "选填。用于贴吧帖子页面请求，可降低登录态或安全验证导致的解析失败。"
   },
   "weibo_cookies": {
     "description": "微博 Cookies",

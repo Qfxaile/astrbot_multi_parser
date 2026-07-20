@@ -1,8 +1,8 @@
 name: astrbot_multi_parser
 display_name: 多平台内容解析
-desc: B站、抖音、小红书、微博、小黑盒、知乎多平台内容解析插件。
-short_desc: 自动解析六大内容平台的分享链接。
-version: v0.2.0
+desc: B站、抖音、小红书、贴吧、微博、小黑盒、知乎多平台内容解析插件。
+short_desc: 自动解析七大内容平台的分享链接。
+version: v0.3.0
 author: Qfxaile
 repo: "https://github.com/Qfxaile/astrbot_multi_parser"
 support_platforms:
