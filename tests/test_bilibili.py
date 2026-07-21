@@ -305,6 +305,63 @@ def test_opus_payload_keeps_paragraph_order():
     ]
 
 
+def test_opus_payload_extracts_top_album_images():
+    payload = {
+        "code": 0,
+        "data": {
+            "item": {
+                "basic": {"title": "顶部相册图文"},
+                "modules": [
+                    {
+                        "module_type": "MODULE_TYPE_TOP",
+                        "module_top": {
+                            "display": {
+                                "album": {
+                                    "pics": [
+                                        {
+                                            "url": "http://i0.hdslb.com/top-1.jpg@672w.webp"
+                                        },
+                                        None,
+                                        {
+                                            "url": "//i0.hdslb.com/top-2.jpg@!web-comment-note.avif"
+                                        },
+                                    ]
+                                }
+                            }
+                        },
+                    },
+                    {
+                        "module_type": "MODULE_TYPE_CONTENT",
+                        "module_content": {
+                            "paragraphs": [
+                                {
+                                    "text": {
+                                        "nodes": [
+                                            {
+                                                "type": "TEXT_NODE_TYPE_WORD",
+                                                "word": {"words": "正文"},
+                                            }
+                                        ]
+                                    },
+                                    "pic": None,
+                                }
+                            ]
+                        },
+                    },
+                ],
+            }
+        },
+    }
+
+    result = bilibili.BilibiliParser({})._parse_opus_payload(payload)
+
+    assert [(item.kind, item.value) for item in result.ordered_contents] == [
+        ("image", "http://i0.hdslb.com/top-1.jpg"),
+        ("image", "https://i0.hdslb.com/top-2.jpg"),
+        ("text", "正文"),
+    ]
+
+
 def test_article_html_keeps_visible_text_and_image_order():
     html = """
     <html>

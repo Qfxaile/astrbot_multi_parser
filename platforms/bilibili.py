@@ -324,6 +324,17 @@ class BilibiliParser(BaseParser):
                 continue
             if module.get("module_author"):
                 author = str(module["module_author"].get("name") or author)
+            top = module.get("module_top") or {}
+            display = top.get("display") or {}
+            album = display.get("album") or {}
+            for pic in album.get("pics") or []:
+                if pic and (image_url := pic.get("url")):
+                    ordered_contents.append(
+                        OrderedContent(
+                            kind="image",
+                            value=_original_image_url(str(image_url)),
+                        )
+                    )
             content = module.get("module_content") or {}
             for paragraph in content.get("paragraphs") or []:
                 if not paragraph:
