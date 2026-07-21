@@ -305,35 +305,107 @@ async def test_parse_game_page_merges_intro_and_materializes_images(
     monkeypatch, assert_temporary_image
 ):
     image_bytes = b"game-image"
+    requests = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "www.xiaoheihe.cn":
-            return httpx.Response(200, text=GAME_HTML, request=request)
+        requests.append(request)
         if request.url.host == "api.xiaoheihe.cn":
-            assert request.url.path == "/game/game_introduction/"
-            assert request.url.params["steam_appid"] == "730"
-            return httpx.Response(
-                200,
-                json={
-                    "status": "ok",
-                    "result": {
-                        "about_the_game": "一款合作游戏",
-                        "release_date": "2020-01-02",
-                        "developers": [{"value": "开发商"}],
-                        "publishers": [{"value": "发行商"}],
+            if request.url.path == "/game/get_game_detail/":
+                assert request.url.params["steam_appid"] == "991d6993109c"
+                assert request.url.params["hkey"]
+                assert request.headers.get("cookie") == "x_xhh_tokenid=Bdevice123"
+                return httpx.Response(
+                    200,
+                    json={
+                        "status": "ok",
+                        "result": {
+                            "appid": 1071870,
+                            "steam_appid": 1071870,
+                            "name": "只只大冒险",
+                            "name_en": "Biped",
+                            "score": "8.7",
+                            "comment_stats": {"score_comment": 2212},
+                            "common_tags": [
+                                {
+                                    "type": "steam_aggre",
+                                    "desc_list": ["中文", "单人/多人"],
+                                },
+                                {"type": "simple_tag", "desc": "动作"},
+                            ],
+                            "screenshots": [
+                                {
+                                    "type": "movie",
+                                    "thumbnail": (
+                                        "https://gameimg.max-c.com/trailer.jpg"
+                                    ),
+                                    "url": "https://video.max-c.com/game.m3u8",
+                                },
+                                {
+                                    "type": "image",
+                                    "url": ("https://gameimg.max-c.com/screenshot.jpg"),
+                                },
+                            ],
+                        },
                     },
-                },
-                request=request,
-            )
+                    request=request,
+                )
+            if request.url.path == "/game/game_introduction/":
+                assert request.url.params["steam_appid"] == "1071870"
+                return httpx.Response(
+                    200,
+                    json={
+                        "status": "ok",
+                        "result": {
+                            "about_the_game": (
+                                '<video><source src="https://video.max-c.com/'
+                                'game.mp4?token=1" type="video/mp4"></video>'
+                            ),
+                            "release_date": "2020-01-02",
+                            "developers": [{"value": "开发商"}],
+                            "publishers": [{"value": "发行商"}],
+                        },
+                    },
+                    request=request,
+                )
         assert request.url.host == "gameimg.max-c.com"
         return httpx.Response(200, content=image_bytes, request=request)
 
     install_mock_client(monkeypatch, handler)
-    result = await XiaoheiheParser({}).parse(
-        ParseContext(text="https://www.xiaoheihe.cn/app/topic/game/pc/730")
+    result = await XiaoheiheParser(
+        {"xiaoheihe_cookies": "x_xhh_tokenid=Bdevice123"}
+    ).parse(
+        ParseContext(
+            text=(
+                "https://api.xiaoheihe.cn/game/share_game_detail?"
+                "appid=991d6993109c&game_type=pc"
+            )
+        )
     )
 
-    assert result.title == "反恐精英（Counter-Strike 2）"
+    assert result.title == "只只大冒险（Biped）"
     assert "开发商：开发商" in result.description
+    assert "类型：[ 中文 单人/多人 ] [ 动作 ]" in result.description
+    assert "小黑盒评分：8.7（2212 人评价）" in result.description
+    assert result.video_url == "https://video.max-c.com/game.mp4?token=1"
+    assert "备用视频: https://video.max-c.com/game.m3u8" in result.extra_lines
+    assert len(result.image_urls) == 2
     assert_temporary_image(result, result.image_urls[0], image_bytes)
-    assert result.video_url == "https://video.max-c.com/game.mp4"
+    assert len(requests) == 4
+
+
+@pytest.mark.asyncio
+async def test_parse_game_reports_detail_api_error(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"status": "error", "msg": "denied"},
+            request=request,
+        )
+
+    install_mock_client(monkeypatch, handler)
+    parser = XiaoheiheParser({"xiaoheihe_cookies": "x_xhh_tokenid=Bdevice123"})
+
+    with pytest.raises(ValueError, match="get_game_detail 请求失败"):
+        await parser.parse(
+            ParseContext(text="https://www.xiaoheihe.cn/app/topic/game/pc/730")
+        )

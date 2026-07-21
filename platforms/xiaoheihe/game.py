@@ -35,17 +35,19 @@ def build_game_result(
 ) -> ParseResult:
     del appid
     image_urls = extract_game_images(game, html_text)
-    video_urls = extract_game_videos(game, html_text)
+    video_urls = extract_game_videos(game, html_text, intro)
+    playable_video_urls = [url for url in video_urls if not is_hls_url(url)]
+    video_url = playable_video_urls[0] if playable_video_urls else ""
     extra_lines = [f"游戏平台: {game_type.upper()}"]
-    extra_lines.extend(f"附加视频: {url}" for url in video_urls[1:])
-    if not image_urls and not video_urls:
+    extra_lines.extend(f"备用视频: {url}" for url in video_urls if is_hls_url(url))
+    if not image_urls and not video_url:
         extra_lines.append("未找到可发送的媒体。")
     return ParseResult(
         platform="xiaoheihe",
         title=build_game_title(game),
         description=build_game_desc(html_text, game, intro),
         image_urls=image_urls,
-        video_url=video_urls[0] if video_urls else "",
+        video_url=video_url,
         extra_lines=extra_lines,
     )
 
@@ -191,7 +193,9 @@ def build_game_desc(html_text: str, game: dict, intro: dict) -> str:
     )
     if intro_text:
         lines.append(intro_text)
-    if game_types := parse_game_types_from_html(html_text):
+    if game_types := parse_game_types_from_api(game) or parse_game_types_from_html(
+        html_text
+    ):
         lines.append(f"类型：{game_types}")
     score = str(game.get("score") or "").strip()
     stats = game.get("comment_stats")
@@ -221,6 +225,31 @@ def build_game_desc(html_text: str, game: dict, intro: dict) -> str:
         if yuan := format_yuan_from_coin(heybox_price.get("cost_coin")):
             lines.append(f"当前价格：¥ {yuan}")
     return "\n\n".join(lines)
+
+
+def parse_game_types_from_api(game: dict) -> str:
+    tags = game.get("common_tags")
+    if not isinstance(tags, list):
+        return ""
+    common = []
+    categories = []
+    for item in tags:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "steam_aggre" and isinstance(
+            item.get("desc_list"), list
+        ):
+            common.extend(
+                clean_text(str(value)) for value in item["desc_list"] if value
+            )
+        elif item.get("type") == "simple_tag" and item.get("desc"):
+            categories.append(clean_text(str(item["desc"])))
+    groups = []
+    if common:
+        groups.append(f"[ {' '.join(common)} ]")
+    if categories:
+        groups.append(f"[ {' '.join(categories)} ]")
+    return " ".join(groups)
 
 
 def parse_game_types_from_html(html_text: str) -> str:
@@ -335,11 +364,18 @@ def extract_game_images(game: dict, html_text: str) -> list[str]:
             continue
         for item in values:
             if isinstance(item, dict):
-                for field in ("url", "image", "img", "src"):
+                for field in ("url", "thumbnail", "image", "img", "src"):
                     add(item.get(field))
             else:
                 add(item)
-    for field in ("header_img", "cover", "cover_img", "poster", "share_img"):
+    for field in (
+        "header_img",
+        "image",
+        "cover",
+        "cover_img",
+        "poster",
+        "share_img",
+    ):
         add(game.get(field))
     if not images:
         for candidate in re.findall(
@@ -351,7 +387,11 @@ def extract_game_images(game: dict, html_text: str) -> list[str]:
     return images
 
 
-def extract_game_videos(game: dict, html_text: str) -> list[str]:
+def extract_game_videos(
+    game: dict,
+    html_text: str,
+    intro: dict | None = None,
+) -> list[str]:
     videos = []
     seen = set()
 
@@ -361,7 +401,20 @@ def extract_game_videos(game: dict, html_text: str) -> list[str]:
             seen.add(video_url)
             videos.append(video_url)
 
+    if isinstance(intro, dict):
+        for candidate in re.findall(
+            r'https?://[^"\'\s<>]+\.mp4(?:\?[^"\'\s<>]*)?',
+            str(intro.get("about_the_game") or ""),
+            re.IGNORECASE,
+        ):
+            add(candidate)
     add(game.get("video_url"))
+    screenshots = game.get("screenshots")
+    if isinstance(screenshots, list):
+        for item in screenshots:
+            if not isinstance(item, dict) or item.get("type") != "movie":
+                continue
+            add(item.get("url") or item.get("video_url"))
     for candidate in re.findall(
         r'https?://[^"\'\s<>]+\.(?:m3u8|mp4|mov)(?:\?[^"\'\s<>]*)?',
         html_text,
@@ -369,3 +422,7 @@ def extract_game_videos(game: dict, html_text: str) -> list[str]:
     ):
         add(candidate)
     return videos
+
+
+def is_hls_url(url: str) -> bool:
+    return bool(re.search(r"\.m3u8(?:$|[?#])", url, re.IGNORECASE))

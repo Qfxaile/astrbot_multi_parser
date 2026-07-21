@@ -441,9 +441,7 @@ async def test_never_mode_keeps_many_images_in_normal_chain(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("length", "should_forward"), [(200, False), (201, True)])
-async def test_text_threshold_is_strictly_greater(
-    monkeypatch, length, should_forward
-):
+async def test_text_threshold_is_strictly_greater(monkeypatch, length, should_forward):
     messages = await collect_results(
         monkeypatch,
         ParseResult(platform="test", title="字" * length),
@@ -457,9 +455,7 @@ async def test_text_threshold_is_strictly_greater(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("count", "should_forward"), [(2, False), (3, True)])
-async def test_image_threshold_is_strictly_greater(
-    monkeypatch, count, should_forward
-):
+async def test_image_threshold_is_strictly_greater(monkeypatch, count, should_forward):
     result = ParseResult(
         platform="test",
         image_urls=[f"base64://{index}" for index in range(count)],
@@ -546,7 +542,7 @@ async def test_negative_thresholds_are_treated_as_zero(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_forward_images_are_followed_by_existing_video_flow(monkeypatch):
+async def test_forward_images_include_video_in_same_forward_message(monkeypatch):
     result = ParseResult(
         platform="test",
         title="摘要",
@@ -565,10 +561,36 @@ async def test_forward_images_are_followed_by_existing_video_flow(monkeypatch):
 
     messages = [item async for item in plugin.handle_parse(FakeEvent())]
 
-    assert len(messages) == 2
+    assert len(messages) == 1
     assert isinstance(messages[0][0], Nodes)
-    assert isinstance(messages[1][0], Video)
+    assert isinstance(messages[0][0].nodes[-1].content[0], Video)
+    assert messages[0][0].nodes[-1].content[0].file == result.video_url
     assert "视频链接" not in messages[0][0].nodes[0].content[0].text
+
+
+@pytest.mark.asyncio
+async def test_non_forward_content_keeps_video_as_separate_message(monkeypatch):
+    result = ParseResult(
+        platform="test",
+        title="summary",
+        image_urls=["base64://1"],
+        video_url="https://example.com/video.mp4",
+    )
+    plugin = make_plugin(result, forward_mode="never")
+    monkeypatch.setattr(
+        main, "extract_context", lambda event: SimpleNamespace(combined_text="url")
+    )
+
+    async def fake_probe(url):
+        return VideoSizeInfo(size_bytes=1024)
+
+    monkeypatch.setattr(plugin, "_probe_video_size", fake_probe)
+
+    messages = [item async for item in plugin.handle_parse(FakeEvent())]
+
+    assert len(messages) == 2
+    assert not isinstance(messages[0][0], Nodes)
+    assert isinstance(messages[1][0], Video)
 
 
 @pytest.mark.asyncio

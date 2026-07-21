@@ -90,22 +90,31 @@ class MultiParserPlugin(Star):
                 await self._react_success(event)
                 result = await parser.parse(context)
                 send_video_by_url = bool(self.config.get("send_video_by_url", True))
-                content_results = self._delivery_service().build_content_results(
-                    event,
-                    result,
-                    include_video_url=not send_video_by_url,
+                should_send_video = False
+                video_reason = ""
+                if send_video_by_url and result.video_url:
+                    size_info = await self._probe_video_size(result.video_url)
+                    should_send_video, video_reason = self._video_send_decision(
+                        size_info
+                    )
+
+                content_results, video_embedded = (
+                    self._delivery_service().build_content_delivery(
+                        event,
+                        result,
+                        include_video_url=not send_video_by_url,
+                        include_video=should_send_video,
+                    )
                 )
                 for message in content_results:
                     yield message
 
                 if send_video_by_url and result.video_url:
-                    size_info = await self._probe_video_size(result.video_url)
-                    should_send_video, reason = self._video_send_decision(size_info)
-                    if should_send_video:
+                    if should_send_video and not video_embedded:
                         yield event.chain_result(result.video_chain())
-                    else:
+                    elif not should_send_video:
                         async for fallback in self._forward_with_fallback(
-                            event, result, reason
+                            event, result, video_reason
                         ):
                             yield fallback
                 elif result.video_url:

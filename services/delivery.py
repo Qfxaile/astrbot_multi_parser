@@ -66,11 +66,26 @@ class DeliveryService:
         *,
         include_video_url: bool,
     ) -> list:
+        results, _ = self.build_content_delivery(
+            event,
+            result,
+            include_video_url=include_video_url,
+        )
+        return results
+
+    def build_content_delivery(
+        self,
+        event: AstrMessageEvent,
+        result: ParseResult,
+        *,
+        include_video_url: bool,
+        include_video: bool = False,
+    ) -> tuple[list, bool]:
         info_chain = result.info_chain(include_video_url=include_video_url)
         if not info_chain:
-            return []
+            return [], False
         if not self._should_forward_content(event, result, info_chain):
-            return [event.chain_result(info_chain)]
+            return [event.chain_result(info_chain)], False
 
         summary_chain = result.info_chain(
             include_content=False,
@@ -80,12 +95,16 @@ class DeliveryService:
             include_summary=False,
             include_video_url=include_video_url,
         )
+        forward_components = [*summary_chain, *content_chain]
+        video_embedded = include_video and bool(result.video_url)
+        if video_embedded:
+            forward_components.extend(result.video_chain())
         sender_name, sender_id = self.sender_identity(event)
         nodes = [
             Node(content=[component], name=sender_name, uin=sender_id)
-            for component in [*summary_chain, *content_chain]
+            for component in forward_components
         ]
-        return [event.chain_result([Nodes(nodes)])]
+        return [event.chain_result([Nodes(nodes)])], video_embedded
 
     def _should_forward_content(
         self,
@@ -96,9 +115,11 @@ class DeliveryService:
         if not self._supports_forward_nodes(event):
             return False
 
-        mode = str(
-            self.config.get("forward_mode", self.DEFAULT_FORWARD_MODE)
-        ).strip().lower()
+        mode = (
+            str(self.config.get("forward_mode", self.DEFAULT_FORWARD_MODE))
+            .strip()
+            .lower()
+        )
         if mode not in self.FORWARD_MODES:
             mode = self.DEFAULT_FORWARD_MODE
         if mode == "always":
@@ -107,9 +128,7 @@ class DeliveryService:
             return False
 
         image_threshold = self._non_negative_int(
-            self.config.get(
-                "forward_image_threshold", self.DEFAULT_IMAGE_THRESHOLD
-            ),
+            self.config.get("forward_image_threshold", self.DEFAULT_IMAGE_THRESHOLD),
             self.DEFAULT_IMAGE_THRESHOLD,
         )
         text_threshold = self._non_negative_int(

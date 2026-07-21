@@ -10,7 +10,6 @@ from .game import (
     build_game_result,
     canonical_game_web_url,
     extract_game_images,
-    extract_game_root,
     extract_game_videos,
     format_yuan_from_coin,
     parse_game_state,
@@ -183,19 +182,39 @@ class XiaoheiheParser(BaseParser):
         appid = appid.strip()
         if not appid:
             raise ValueError("无效的小黑盒游戏 appid")
+        request_context = await self._build_request_context()
         web_url = canonical_game_web_url(appid, game_type)
         async with httpx.AsyncClient(
             timeout=self._timeout(),
-            follow_redirects=True,
+            follow_redirects=False,
             headers=self.HEADERS,
         ) as client:
-            response = await client.get(
-                web_url,
-                headers={"Accept": "text/html,application/xhtml+xml,*/*"},
+            detail_response = await client.get(
+                "https://api.xiaoheihe.cn/game/get_game_detail/",
+                params={
+                    "app": "heybox",
+                    "os_type": "web",
+                    "x_app": "heybox_website",
+                    "x_client_type": "web",
+                    "x_os_type": "Windows",
+                    "x_client_version": "",
+                    "client_type": "web",
+                    "web_version": "3.0",
+                    "version": "999.0.4",
+                    "steam_appid": appid,
+                    **self._sign_path("/game/get_game_detail/"),
+                },
+                headers={"Cookie": f"x_xhh_tokenid={request_context['x_xhh_tokenid']}"},
             )
-            response.raise_for_status()
-            html_text = response.text
-            game = extract_game_root(html_text, appid)
+            detail_response.raise_for_status()
+            detail_payload = detail_response.json()
+            if (
+                not isinstance(detail_payload, dict)
+                or detail_payload.get("status") != "ok"
+                or not isinstance(detail_payload.get("result"), dict)
+            ):
+                raise ValueError("小黑盒 get_game_detail 请求失败")
+            game = detail_payload["result"]
             steam_appid = pick_steam_appid(game, appid)
             intro: dict = {}
             if steam_appid is not None:
@@ -211,7 +230,7 @@ class XiaoheiheParser(BaseParser):
                     and isinstance(intro_payload.get("result"), dict)
                 ):
                     intro = intro_payload["result"]
-            result = build_game_result(html_text, game, appid, game_type, intro)
+            result = build_game_result("", game, appid, game_type, intro)
             return await self.materialize_images(result, client, web_url)
 
     def _sign_path(self, path: str) -> dict[str, str | int]:
