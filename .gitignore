@@ -27,3 +27,7 @@ temp/
 data/
 docs/
 .worktrees/
+
+.agents/
+
+/AGENTS.md
