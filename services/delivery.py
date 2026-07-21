@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent
+from astrbot.api.event import AstrMessageEvent, MessageChain
 from astrbot.api.message_components import Node, Nodes, Plain
 
 from ..core.contracts import ParseResult
@@ -15,6 +15,7 @@ class DeliveryService:
     DEFAULT_FORWARD_MODE = "threshold"
     DEFAULT_IMAGE_THRESHOLD = 2
     DEFAULT_TEXT_THRESHOLD = 200
+    FORWARD_NODE_LIMIT = 100
 
     def __init__(self, config: Mapping[str, object]) -> None:
         self.config = config
@@ -91,19 +92,99 @@ class DeliveryService:
         video_embedded = (
             include_video
             and bool(result.video_url)
-            and (
-                self._forward_mode() == "always"
-                or result.keep_video_in_forward
-            )
+            and (self._forward_mode() == "always" or result.keep_video_in_forward)
         )
         if video_embedded:
             forward_components.extend(result.video_chain())
         sender_name, sender_id = self.sender_identity(event)
+        merged_components = self._merge_adjacent_plain_components(forward_components)
         nodes = [
             Node(content=[component], name=sender_name, uin=sender_id)
-            for component in forward_components
+            for component in merged_components
         ]
-        return [event.chain_result([Nodes(nodes)])], video_embedded
+        results = [
+            event.chain_result([Nodes(batch)])
+            for batch in self._balanced_forward_batches(nodes)
+        ]
+        return results, video_embedded
+
+    @classmethod
+    def _balanced_forward_batches(cls, nodes: list[Node]) -> list[list[Node]]:
+        """均衡拆分超长转发，避免首批贴近上限而尾批过小。"""
+        if not nodes:
+            return []
+        batch_count = (
+            len(nodes) + cls.FORWARD_NODE_LIMIT - 1
+        ) // cls.FORWARD_NODE_LIMIT
+        batch_size = (len(nodes) + batch_count - 1) // batch_count
+        return [
+            nodes[index : index + batch_size]
+            for index in range(0, len(nodes), batch_size)
+        ]
+
+    async def send_forward_results(
+        self, event: AstrMessageEvent, results: list
+    ) -> None:
+        """发送合并转发；投递失败时保持顺序递归缩小批次。"""
+        for result in results:
+            chain = getattr(result, "chain", result)
+            if len(chain) != 1 or not isinstance(chain[0], Nodes):
+                raise ValueError("合并转发结果结构无效")
+            await self._send_forward_nodes_with_retry(event, chain[0].nodes)
+
+    async def _send_forward_nodes_with_retry(
+        self,
+        event: AstrMessageEvent,
+        nodes: list[Node],
+    ) -> None:
+        try:
+            await event.send(MessageChain([Nodes(nodes)]))
+            return
+        except Exception as exc:
+            if len(nodes) == 1:
+                logger.warning(f"单节点合并转发失败，降级为普通消息: {exc}")
+                await event.send(MessageChain(list(nodes[0].content)))
+                return
+            middle = (len(nodes) + 1) // 2
+            logger.warning(
+                f"{len(nodes)} 节点合并转发失败，将按顺序拆为 "
+                f"{middle} + {len(nodes) - middle} 节点重试: {exc}"
+            )
+        await self._send_forward_nodes_with_retry(event, nodes[:middle])
+        await self._send_forward_nodes_with_retry(event, nodes[middle:])
+
+    @staticmethod
+    def is_forward_delivery(results: list) -> bool:
+        if not results:
+            return False
+        chain = getattr(results[0], "chain", results[0])
+        return len(chain) == 1 and isinstance(chain[0], Nodes)
+
+    @classmethod
+    def _merge_adjacent_plain_components(cls, components: list) -> list:
+        """合并相邻文本并保留媒体边界与原始顺序。"""
+        merged: list = []
+        for component in components:
+            if (
+                isinstance(component, Plain)
+                and merged
+                and isinstance(merged[-1], Plain)
+            ):
+                previous = merged[-1]
+                merged[-1] = Plain(cls._join_plain_text(previous.text, component.text))
+                continue
+            merged.append(component)
+        return merged
+
+    @staticmethod
+    def _join_plain_text(previous: str, current: str) -> str:
+        previous = previous.rstrip("\r\n")
+        current = current.lstrip("\r\n")
+        if not previous:
+            return current
+        if not current:
+            return previous
+        return f"{previous}\n{current}"
 
     def _should_forward_content(
         self,

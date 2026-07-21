@@ -38,10 +38,14 @@ class FakeEvent:
         sender=None,
         raw_message=None,
         platform_name="aiocqhttp",
+        forward_failure_limit=None,
     ):
         self.sender_id = sender_id
         self.sender_name = sender_name
         self.platform_name = platform_name
+        self.forward_failure_limit = forward_failure_limit
+        self.sent = []
+        self.forward_attempt_sizes = []
         self.message_obj = SimpleNamespace(
             raw_message=(
                 {"sender": sender or {}} if raw_message is None else raw_message
@@ -65,6 +69,18 @@ class FakeEvent:
 
     def plain_result(self, text):
         return [Plain(text)]
+
+    async def send(self, message):
+        chain = list(message.chain)
+        if len(chain) == 1 and isinstance(chain[0], Nodes):
+            node_count = len(chain[0].nodes)
+            self.forward_attempt_sizes.append(node_count)
+            if (
+                self.forward_failure_limit is not None
+                and node_count > self.forward_failure_limit
+            ):
+                raise RuntimeError("forward rejected")
+        self.sent.append(chain)
 
 
 def make_plugin(result: ParseResult, **config):
@@ -164,7 +180,14 @@ async def collect_results(monkeypatch, result, event=None, **config):
         main, "extract_context", lambda event: SimpleNamespace(combined_text="url")
     )
     plugin = make_plugin(result, **config)
-    return [item async for item in plugin.handle_parse(event or FakeEvent())]
+    target_event = event or FakeEvent()
+    yielded = [item async for item in plugin.handle_parse(target_event)]
+    return [*target_event.sent, *yielded]
+
+
+async def collect_plugin_results(plugin, event):
+    yielded = [item async for item in plugin.handle_parse(event)]
+    return [*event.sent, *yielded]
 
 
 @pytest.mark.asyncio
@@ -247,6 +270,91 @@ async def test_four_images_create_four_nodes(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_adjacent_forward_text_is_merged_with_newlines(monkeypatch):
+    contents = [
+        OrderedContent("text", "第一段\n"),
+        OrderedContent("text", "\n第二段"),
+        OrderedContent("image", "base64://image"),
+        OrderedContent("text", "第三段"),
+        OrderedContent("text", "第四段"),
+    ]
+
+    messages = await collect_results(
+        monkeypatch,
+        ParseResult(platform="test", ordered_contents=contents),
+        forward_mode="always",
+    )
+
+    nodes = messages[0][0].nodes
+    assert [type(node.content[0]) for node in nodes] == [Plain, Image, Plain]
+    assert nodes[0].content[0].text == "第一段\n第二段"
+    assert nodes[1].content[0].file == "base64://image"
+    assert nodes[2].content[0].text == "第三段\n第四段"
+
+
+@pytest.mark.asyncio
+async def test_forward_is_split_at_official_node_limit(monkeypatch):
+    result = ParseResult(
+        platform="test",
+        image_urls=[f"base64://{index}" for index in range(101)],
+    )
+
+    messages = await collect_results(
+        monkeypatch,
+        result,
+        forward_mode="always",
+    )
+
+    assert [len(message[0].nodes) for message in messages] == [51, 50]
+    assert [
+        node.content[0].file for message in messages for node in message[0].nodes
+    ] == [f"base64://{index}" for index in range(101)]
+
+
+@pytest.mark.asyncio
+async def test_rejected_forward_batches_are_retried_without_losing_order(
+    monkeypatch,
+):
+    event = FakeEvent(forward_failure_limit=25)
+    result = ParseResult(
+        platform="test",
+        image_urls=[f"base64://{index}" for index in range(101)],
+    )
+
+    messages = await collect_results(
+        monkeypatch,
+        result,
+        event=event,
+        forward_mode="always",
+    )
+
+    assert event.forward_attempt_sizes[:2] == [51, 26]
+    assert all(len(message[0].nodes) <= 25 for message in messages)
+    assert [
+        node.content[0].file for message in messages for node in message[0].nodes
+    ] == [f"base64://{index}" for index in range(101)]
+
+
+@pytest.mark.asyncio
+async def test_rejected_single_forward_node_falls_back_to_plain_delivery(
+    monkeypatch,
+):
+    event = FakeEvent(forward_failure_limit=0)
+
+    messages = await collect_results(
+        monkeypatch,
+        ParseResult(platform="test", title="正文"),
+        event=event,
+        forward_mode="always",
+    )
+
+    assert event.forward_attempt_sizes == [1]
+    assert len(messages) == 1
+    assert isinstance(messages[0][0], Plain)
+    assert messages[0][0].text == "正文"
+
+
+@pytest.mark.asyncio
 async def test_description_without_images_stays_in_plain_message(monkeypatch):
     result = ParseResult(platform="test", description="只有简介")
 
@@ -279,7 +387,6 @@ async def test_ordered_text_success_failure_success_preserves_component_order(
     nodes = messages[0][0].nodes
     assert [type(node.content[0]) for node in nodes] == [
         Plain,
-        Plain,
         Image,
         Plain,
         Image,
@@ -290,8 +397,7 @@ async def test_ordered_text_success_failure_success_preserves_component_order(
         for node in nodes
         for component in node.content
     ] == [
-        "摘要",
-        "正文一",
+        "摘要\n正文一",
         "base64://1",
         "第 2 张图片获取失败",
         "base64://3",
@@ -559,13 +665,11 @@ async def test_threshold_forward_keeps_regular_video_as_separate_message(monkeyp
 
     monkeypatch.setattr(plugin, "_probe_video_size", fake_probe)
 
-    messages = [item async for item in plugin.handle_parse(FakeEvent())]
+    messages = await collect_plugin_results(plugin, FakeEvent())
 
     assert len(messages) == 2
     assert isinstance(messages[0][0], Nodes)
-    assert not any(
-        isinstance(node.content[0], Video) for node in messages[0][0].nodes
-    )
+    assert not any(isinstance(node.content[0], Video) for node in messages[0][0].nodes)
     assert isinstance(messages[1][0], Video)
     assert messages[1][0].file == result.video_url
 
@@ -590,7 +694,7 @@ async def test_threshold_forward_keeps_xiaoheihe_game_video_inside(monkeypatch):
 
     monkeypatch.setattr(plugin, "_probe_video_size", fake_probe)
 
-    messages = [item async for item in plugin.handle_parse(FakeEvent())]
+    messages = await collect_plugin_results(plugin, FakeEvent())
 
     assert len(messages) == 1
     assert isinstance(messages[0][0], Nodes)
@@ -615,7 +719,7 @@ async def test_always_forward_keeps_regular_video_inside(monkeypatch):
 
     monkeypatch.setattr(plugin, "_probe_video_size", fake_probe)
 
-    messages = [item async for item in plugin.handle_parse(FakeEvent())]
+    messages = await collect_plugin_results(plugin, FakeEvent())
 
     assert len(messages) == 1
     assert isinstance(messages[0][0], Nodes)
@@ -631,9 +735,7 @@ async def test_forward_description_matches_plain_chain_format(monkeypatch):
         image_urls=["base64://1", "base64://2", "base64://3"],
     )
 
-    plain_messages = await collect_results(
-        monkeypatch, result, forward_mode="never"
-    )
+    plain_messages = await collect_results(monkeypatch, result, forward_mode="never")
     forward_messages = await collect_results(monkeypatch, result)
 
     plain_chain = plain_messages[0]
@@ -669,7 +771,7 @@ async def test_non_forward_content_keeps_video_as_separate_message(monkeypatch):
 
     monkeypatch.setattr(plugin, "_probe_video_size", fake_probe)
 
-    messages = [item async for item in plugin.handle_parse(FakeEvent())]
+    messages = await collect_plugin_results(plugin, FakeEvent())
 
     assert len(messages) == 2
     assert not isinstance(messages[0][0], Nodes)
@@ -697,17 +799,20 @@ async def test_video_url_is_only_in_summary_when_direct_send_is_disabled(
 
     monkeypatch.setattr(plugin, "_send_forward_links", fake_forward)
 
-    messages = [item async for item in plugin.handle_parse(FakeEvent())]
+    messages = await collect_plugin_results(plugin, FakeEvent())
 
     assert len(messages) == 1
     nodes = messages[0][0].nodes
     plain_nodes = [
         node.content[0] for node in nodes if isinstance(node.content[0], Plain)
     ]
-    assert sum(
-        "视频链接: https://example.com/video.mp4" in component.text
-        for component in plain_nodes
-    ) == 1
+    assert (
+        sum(
+            "视频链接: https://example.com/video.mp4" in component.text
+            for component in plain_nodes
+        )
+        == 1
+    )
     assert len(forwarded) == 1
 
 

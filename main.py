@@ -106,8 +106,12 @@ class MultiParserPlugin(Star):
                         include_video=should_send_video,
                     )
                 )
-                for message in content_results:
-                    yield message
+                delivery = self._delivery_service()
+                if delivery.is_forward_delivery(content_results):
+                    await delivery.send_forward_results(event, content_results)
+                else:
+                    for message in content_results:
+                        yield message
 
                 if send_video_by_url and result.video_url:
                     if should_send_video and not video_embedded:
