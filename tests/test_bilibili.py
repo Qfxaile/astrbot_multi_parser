@@ -204,6 +204,41 @@ def test_dynamic_archive_uses_original_cover_url():
     ]
 
 
+def test_dynamic_article_uses_article_description_and_covers():
+    payload = {
+        "code": 0,
+        "data": {
+            "item": {
+                "modules": {
+                    "module_author": {"name": "专栏作者"},
+                    "module_dynamic": {
+                        "desc": None,
+                        "major": {
+                            "type": "MAJOR_TYPE_ARTICLE",
+                            "article": {
+                                "title": "传统专栏标题",
+                                "desc": "传统专栏摘要",
+                                "covers": [
+                                    "//i0.hdslb.com/article-cover.jpg@672w.webp"
+                                ],
+                            },
+                        },
+                    },
+                }
+            }
+        },
+    }
+
+    result = bilibili.BilibiliParser({})._parse_dynamic_payload(payload)
+
+    assert result.title == "传统专栏标题"
+    assert result.author == "专栏作者"
+    assert [(item.kind, item.value) for item in result.ordered_contents] == [
+        ("text", "传统专栏摘要"),
+        ("image", "https://i0.hdslb.com/article-cover.jpg"),
+    ]
+
+
 def test_opus_payload_keeps_paragraph_order():
     payload = {
         "code": 0,
@@ -227,9 +262,11 @@ def test_opus_payload_keeps_paragraph_order():
                                                 "word": {"words": "第一段"},
                                             }
                                         ]
-                                    }
+                                    },
+                                    "pic": None,
                                 },
                                 {
+                                    "text": None,
                                     "pic": {
                                         "pics": [
                                             {
@@ -246,7 +283,8 @@ def test_opus_payload_keeps_paragraph_order():
                                                 "rich": {"text": "第二段"},
                                             }
                                         ]
-                                    }
+                                    },
+                                    "pic": None,
                                 },
                             ]
                         },
@@ -295,9 +333,40 @@ def test_article_html_keeps_visible_text_and_image_order():
     ]
 
 
+def test_article_payload_keeps_full_content_and_image_order():
+    payload = {
+        "code": 0,
+        "data": {
+            "title": "传统专栏标题",
+            "author": {"name": "专栏作者"},
+            "origin_image_urls": [
+                "//i0.hdslb.com/article-cover.jpg@672w.webp"
+            ],
+            "content": (
+                '<img data-src="//i0.hdslb.com/article-cover.jpg@672w.webp">'
+                "<p>完整正文第一段</p>"
+                '<figure><img data-src="//i0.hdslb.com/content.jpg@672w.webp"></figure>'
+                "<p>完整正文第二段</p>"
+            ),
+        },
+    }
+
+    result = bilibili.BilibiliParser({})._parse_article_payload(payload)
+
+    assert result.title == "传统专栏标题"
+    assert result.author == "专栏作者"
+    assert [(item.kind, item.value) for item in result.ordered_contents] == [
+        ("image", "https://i0.hdslb.com/article-cover.jpg"),
+        ("image", "https://i0.hdslb.com/article-cover.jpg"),
+        ("text", "完整正文第一段"),
+        ("image", "https://i0.hdslb.com/content.jpg"),
+        ("text", "完整正文第二段"),
+    ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("page_url", "api_path", "payload", "expected_referer"),
+    ("page_url", "api_path", "payload", "expected_referer", "expected_id"),
     [
         (
             "https://t.bilibili.com/123",
@@ -325,6 +394,7 @@ def test_article_html_keeps_visible_text_and_image_order():
                 },
             },
             "https://www.bilibili.com",
+            "123",
         ),
         (
             "https://www.bilibili.com/opus/456",
@@ -355,11 +425,18 @@ def test_article_html_keeps_visible_text_and_image_order():
                 },
             },
             "https://www.bilibili.com/opus/456",
+            "456",
         ),
     ],
 )
 async def test_dynamic_and_opus_materialize_original_images(
-    monkeypatch, page_url, api_path, payload, expected_referer, assert_temporary_image
+    monkeypatch,
+    page_url,
+    api_path,
+    payload,
+    expected_referer,
+    expected_id,
+    assert_temporary_image,
 ):
     api_request = None
     image_request = None
@@ -394,6 +471,8 @@ async def test_dynamic_and_opus_materialize_original_images(
         "https://i0.hdslb.com/opus.jpg",
     }
     assert api_request is not None
+    assert api_request.url.params["id"] == expected_id
+    assert "opus_id" not in api_request.url.params
     assert "SESSDATA=graphic-session" in api_request.headers["Cookie"]
     assert "Cookie" not in image_request.headers
     assert image_request.headers["Referer"] == expected_referer
@@ -406,28 +485,115 @@ async def test_dynamic_and_opus_materialize_original_images(
 
 
 @pytest.mark.asyncio
+async def test_opus_falls_back_to_dynamic_article(monkeypatch):
+    api_requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        api_requests.append(request)
+        if request.url.path == "/x/polymer/web-dynamic/v1/opus/detail":
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"item": None, "fallback": True}},
+                request=request,
+            )
+        if request.url.path == "/x/polymer/web-dynamic/v1/detail":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "item": {
+                            "modules": {
+                                "module_author": {"name": "专栏作者"},
+                                "module_dynamic": {
+                                    "desc": None,
+                                    "major": {
+                                        "type": "MAJOR_TYPE_ARTICLE",
+                                        "article": {
+                                            "id": 154325,
+                                            "title": "传统专栏标题",
+                                            "desc": "传统专栏摘要",
+                                            "covers": [],
+                                        },
+                                    },
+                                },
+                            }
+                        }
+                    },
+                },
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {
+                    "title": "传统专栏标题",
+                    "author": {"name": "专栏作者"},
+                    "content": "<p>完整专栏正文</p>",
+                },
+            },
+            request=request,
+        )
+
+    async_client = httpx.AsyncClient
+
+    def create_client(**kwargs):
+        return async_client(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(bilibili.httpx, "AsyncClient", create_client)
+
+    result = await bilibili.BilibiliParser({}).parse(
+        ParseContext(text="https://www.bilibili.com/opus/73309181869226939")
+    )
+
+    assert result.title == "传统专栏标题"
+    assert result.author == "专栏作者"
+    assert [(item.kind, item.value) for item in result.ordered_contents] == [
+        ("text", "完整专栏正文")
+    ]
+    assert [request.url.path for request in api_requests] == [
+        "/x/polymer/web-dynamic/v1/opus/detail",
+        "/x/polymer/web-dynamic/v1/detail",
+        "/x/article/view",
+    ]
+    assert [request.url.params["id"] for request in api_requests] == [
+        "73309181869226939",
+        "73309181869226939",
+        "154325",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_article_materializes_original_image_and_preserves_failed_slot(
     monkeypatch, assert_temporary_image
 ):
     article_url = "https://www.bilibili.com/read/cv789"
-    html = """
-    <html><head><meta property="og:title" content="专栏标题"></head>
-    <body><div class="article-holder">
-      <p>第一段</p>
-      <img src="//i0.hdslb.com/failed.jpg@!web-article-pic.avif">
-      <p>第二段</p>
-      <img src="//i0.hdslb.com/working.jpg@672w.webp">
-    </div></body></html>
-    """
+    payload = {
+        "code": 0,
+        "data": {
+            "title": "专栏标题",
+            "author": {"name": "专栏作者"},
+            "origin_image_urls": [
+                "//i0.hdslb.com/article-cover.jpg@672w.webp"
+            ],
+            "content": (
+                "<p>第一段</p>"
+                '<img src="//i0.hdslb.com/failed.jpg@!web-article-pic.avif">'
+                "<p>第二段</p>"
+                '<img src="//i0.hdslb.com/working.jpg@672w.webp">'
+            ),
+        },
+    }
     image_requests = []
     article_request = None
     client_kwargs = None
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal article_request
-        if request.url.path == "/read/cv789":
+        if request.url.path == "/x/article/view":
             article_request = request
-            return httpx.Response(200, text=html, request=request)
+            return httpx.Response(200, json=payload, request=request)
         image_requests.append(request)
         if request.url.path.endswith("failed.jpg"):
             return httpx.Response(403, request=request)
@@ -446,18 +612,24 @@ async def test_article_materializes_original_image_and_preserves_failed_slot(
         {"bilibili_cookies": "SESSDATA=article-session"}
     ).parse(ParseContext(text=article_url))
 
-    assert [(item.kind, item.value) for item in result.ordered_contents[:3]] == [
+    assert result.ordered_contents[0].kind == "image"
+    assert_temporary_image(
+        result, result.ordered_contents[0].value, b"article-image"
+    )
+    assert [(item.kind, item.value) for item in result.ordered_contents[1:4]] == [
         ("text", "第一段"),
-        ("image_error", "第 1 张图片获取失败：HTTP 403"),
+        ("image_error", "第 2 张图片获取失败：HTTP 403"),
         ("text", "第二段"),
     ]
-    assert result.ordered_contents[3].kind == "image"
-    assert_temporary_image(result, result.ordered_contents[3].value, b"article-image")
+    assert result.ordered_contents[4].kind == "image"
+    assert_temporary_image(result, result.ordered_contents[4].value, b"article-image")
     assert [str(request.url) for request in image_requests] == [
+        "https://i0.hdslb.com/article-cover.jpg",
         "https://i0.hdslb.com/failed.jpg",
         "https://i0.hdslb.com/working.jpg",
     ]
     assert article_request is not None
+    assert article_request.url.params["id"] == "789"
     assert "SESSDATA=article-session" in article_request.headers["Cookie"]
     assert all("Cookie" not in request.headers for request in image_requests)
     assert all(request.headers["Referer"] == article_url for request in image_requests)

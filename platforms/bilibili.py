@@ -109,6 +109,7 @@ class BilibiliParser(BaseParser):
     ARTICLE_PATTERN = r"https?://www\.bilibili\.com/read/cv(?P<article_id>\d+)"
     DYNAMIC_API = "https://api.bilibili.com/x/polymer/web-dynamic/v1/detail"
     OPUS_API = "https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/detail"
+    ARTICLE_API = "https://api.bilibili.com/x/article/view"
 
     async def match(self, context: ParseContext) -> bool:
         text = context.combined_text
@@ -202,13 +203,14 @@ class BilibiliParser(BaseParser):
         """
         if payload.get("code") not in (None, 0):
             raise ValueError(str(payload.get("message") or "B站动态请求失败"))
-        item = payload.get("data", {}).get("item", {})
-        modules = item.get("modules", {})
+        item = (payload.get("data") or {}).get("item") or {}
+        modules = item.get("modules") or {}
         if not modules:
             raise ValueError("B站动态数据为空")
-        author = str(modules.get("module_author", {}).get("name") or "未知作者")
-        dynamic = modules.get("module_dynamic", {})
-        description = str(dynamic.get("desc", {}).get("text") or "").strip()
+        author_info = modules.get("module_author") or {}
+        author = str(author_info.get("name") or "未知作者")
+        dynamic = modules.get("module_dynamic") or {}
+        description = str((dynamic.get("desc") or {}).get("text") or "").strip()
         major = dynamic.get("major") or {}
         major_type = major.get("type", "")
         title = "B站动态"
@@ -219,8 +221,8 @@ class BilibiliParser(BaseParser):
             title = str(opus.get("title") or title)
             image_urls = [
                 _original_image_url(str(pic.get("url")))
-                for pic in opus.get("pics", [])
-                if pic.get("url")
+                for pic in opus.get("pics") or []
+                if pic and pic.get("url")
             ]
         elif major_type == "MAJOR_TYPE_ARCHIVE":
             archive = major.get("archive") or {}
@@ -228,6 +230,15 @@ class BilibiliParser(BaseParser):
             description = description or str(archive.get("desc") or "").strip()
             if cover := archive.get("cover"):
                 image_urls.append(_original_image_url(str(cover)))
+        elif major_type == "MAJOR_TYPE_ARTICLE":
+            article = major.get("article") or {}
+            title = str(article.get("title") or title)
+            description = description or str(article.get("desc") or "").strip()
+            image_urls = [
+                _original_image_url(str(cover))
+                for cover in article.get("covers") or []
+                if cover
+            ]
 
         ordered_contents = []
         if description:
@@ -251,10 +262,39 @@ class BilibiliParser(BaseParser):
         ) as client:
             response = await client.get(
                 self.OPUS_API,
-                params={"opus_id": opus_id},
+                params={"id": opus_id},
             )
             response.raise_for_status()
-            result = self._parse_opus_payload(response.json())
+            payload = response.json()
+            data = payload.get("data") or {}
+            if data.get("fallback"):
+                response = await client.get(
+                    self.DYNAMIC_API,
+                    params={"id": opus_id},
+                )
+                response.raise_for_status()
+                dynamic_payload = response.json()
+                item = (dynamic_payload.get("data") or {}).get("item") or {}
+                modules = item.get("modules") or {}
+                dynamic = modules.get("module_dynamic") or {}
+                major = dynamic.get("major") or {}
+                article = major.get("article") or {}
+                article_id = (
+                    str(article.get("id") or "")
+                    if major.get("type") == "MAJOR_TYPE_ARTICLE"
+                    else ""
+                )
+                if article_id:
+                    response = await client.get(
+                        self.ARTICLE_API,
+                        params={"id": article_id},
+                    )
+                    response.raise_for_status()
+                    result = self._parse_article_payload(response.json())
+                else:
+                    result = self._parse_dynamic_payload(dynamic_payload)
+            else:
+                result = self._parse_opus_payload(payload)
             return await self.materialize_images(result, client, referer)
 
     def _parse_opus_payload(self, payload: dict) -> ParseResult:
@@ -271,22 +311,31 @@ class BilibiliParser(BaseParser):
         """
         if payload.get("code") not in (None, 0):
             raise ValueError(str(payload.get("message") or "B站图文请求失败"))
-        item = payload.get("data", {}).get("item", {})
+        item = (payload.get("data") or {}).get("item") or {}
         if not item:
             raise ValueError("B站图文数据为空")
-        title = str(item.get("basic", {}).get("title") or "B站图文")
+        basic = item.get("basic") or {}
+        title = str(basic.get("title") or "B站图文")
         author = "未知作者"
         ordered_contents: list[OrderedContent] = []
         # 按模块和段落原始顺序追加文本、图片，确保最终消息保持页面图文顺序。
-        for module in item.get("modules", []):
+        for module in item.get("modules") or []:
+            if not module:
+                continue
             if module.get("module_author"):
                 author = str(module["module_author"].get("name") or author)
             content = module.get("module_content") or {}
-            for paragraph in content.get("paragraphs", []):
+            for paragraph in content.get("paragraphs") or []:
+                if not paragraph:
+                    continue
                 text_parts = []
-                for node in paragraph.get("text", {}).get("nodes", []):
+                text = paragraph.get("text") or {}
+                for node in text.get("nodes") or []:
+                    if not node:
+                        continue
                     if node.get("type") == "TEXT_NODE_TYPE_WORD":
-                        text_parts.append(str(node.get("word", {}).get("words") or ""))
+                        word = node.get("word") or {}
+                        text_parts.append(str(word.get("words") or ""))
                     elif node.get("type") == "TEXT_NODE_TYPE_RICH":
                         rich = node.get("rich") or {}
                         text_parts.append(
@@ -294,8 +343,9 @@ class BilibiliParser(BaseParser):
                         )
                 if text := "".join(text_parts).strip():
                     ordered_contents.append(OrderedContent(kind="text", value=text))
-                for pic in paragraph.get("pic", {}).get("pics", []):
-                    if image_url := pic.get("url"):
+                picture = paragraph.get("pic") or {}
+                for pic in picture.get("pics") or []:
+                    if pic and (image_url := pic.get("url")):
                         ordered_contents.append(
                             OrderedContent(
                                 kind="image",
@@ -309,19 +359,51 @@ class BilibiliParser(BaseParser):
             ordered_contents=ordered_contents,
         )
 
+    def _parse_article_payload(self, payload: dict) -> ParseResult:
+        """将传统专栏接口载荷转换为包含完整正文的解析结果。"""
+        if payload.get("code") not in (None, 0):
+            raise ValueError(str(payload.get("message") or "B站专栏请求失败"))
+        data = payload.get("data") or {}
+        content = str(data.get("content") or "")
+        if not content:
+            raise ValueError("B站专栏正文不可访问")
+
+        parsed = self._parse_article_html(
+            f'<div class="article-content">{content}</div>'
+        )
+        author = data.get("author") or {}
+        cover_candidates = data.get("origin_image_urls") or data.get("image_urls") or []
+        if not isinstance(cover_candidates, list):
+            cover_candidates = []
+        cover_urls = []
+        for cover in cover_candidates:
+            cover_url = _original_image_url(str(cover or ""))
+            if cover_url.startswith(("http://", "https://")) and cover_url not in cover_urls:
+                cover_urls.append(cover_url)
+        ordered_contents = [
+            OrderedContent(kind="image", value=cover_url) for cover_url in cover_urls
+        ]
+        ordered_contents.extend(parsed.ordered_contents)
+        return ParseResult(
+            platform=self.name,
+            title=str(data.get("title") or parsed.title),
+            author=str(author.get("name") or parsed.author),
+            ordered_contents=ordered_contents,
+        )
+
     async def _parse_article(self, article_id: str) -> ParseResult:
         url = f"https://www.bilibili.com/read/cv{article_id}"
         async with httpx.AsyncClient(
             timeout=self.request_timeout,
-            follow_redirects=True,
             headers=self._headers(url),
             cookies=self._cookies(),
         ) as client:
-            response = await client.get(url)
+            response = await client.get(
+                self.ARTICLE_API,
+                params={"id": article_id},
+            )
             response.raise_for_status()
-            if match := re.search(self.OPUS_PATTERN, str(response.url)):
-                return await self._parse_opus(match.group("opus_id"))
-            result = self._parse_article_html(response.text)
+            result = self._parse_article_payload(response.json())
             return await self.materialize_images(result, client, url)
 
     def _parse_article_html(self, html: str) -> ParseResult:
