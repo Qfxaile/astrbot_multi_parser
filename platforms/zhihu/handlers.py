@@ -149,7 +149,6 @@ def parse_pin_payload(payload: object) -> ParseResult:
         raise ValueError("知乎想法数据为空")
     contents: list[OrderedContent] = []
     videos: list[str] = []
-    seen_images: set[str] = set()
     seen_videos: set[str] = set()
     raw_content = payload.get("content")
 
@@ -174,9 +173,7 @@ def parse_pin_payload(payload: object) -> ParseResult:
                 image_url = normalize_media_url(
                     str(block.get("original_url") or block.get("url") or "")
                 )
-                key = media_key(image_url)
-                if image_url and key and key not in seen_images:
-                    seen_images.add(key)
+                if image_url:
                     contents.append(OrderedContent(kind="image", value=image_url))
             elif block_type == "video":
                 for video_url in _find_video_urls(block):

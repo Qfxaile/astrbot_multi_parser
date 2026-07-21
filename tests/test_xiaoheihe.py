@@ -141,6 +141,7 @@ def test_post_payload_keeps_text_and_images_in_source_order():
         ("text", "第二段"),
         ("image", "https://imgheybox.max-c.com/bbs/b.jpg?token=2"),
         ("text", "第三段"),
+        ("image", "https://imgheybox.max-c.com/bbs/a.jpg?token=duplicate"),
     ]
 
 

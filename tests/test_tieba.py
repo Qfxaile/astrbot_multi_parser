@@ -35,6 +35,7 @@ def test_parse_page_keeps_first_post_text_image_order_and_video():
           <img class="BDE_Image"
                src="https://tiebapic.baidu.com/forum/pic/item/first.jpg">
           <div>第二段正文</div>
+          <img src="https://tiebapic.baidu.com/forum/pic/item/first.jpg">
           <video src="https://video-tieba.cdn.bcebos.com/example.mp4"></video>
         </div>
       </div>
@@ -56,6 +57,7 @@ def test_parse_page_keeps_first_post_text_image_order_and_video():
         ("text", "第一段正文"),
         ("image", "https://tiebapic.baidu.com/forum/pic/item/first.jpg"),
         ("text", "第二段正文"),
+        ("image", "https://tiebapic.baidu.com/forum/pic/item/first.jpg"),
     ]
 
 

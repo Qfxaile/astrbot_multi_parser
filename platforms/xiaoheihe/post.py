@@ -98,12 +98,11 @@ def parse_post_contents(raw_text: object) -> list[OrderedContent]:
         return [OrderedContent(kind="text", value=text)] if text else []
 
     contents: list[OrderedContent] = []
-    seen_images: set[str] = set()
     for block in blocks:
         if not isinstance(block, dict):
             continue
         if str(block.get("type") or "") == "img":
-            append_image(contents, seen_images, block.get("url"))
+            append_image(contents, block.get("url"))
             continue
         fragment = str(block.get("text") or "")
         if not fragment:
@@ -113,7 +112,7 @@ def parse_post_contents(raw_text: object) -> list[OrderedContent]:
         parser.close()
         for item in parser.contents:
             if item.kind == "image":
-                append_image(contents, seen_images, item.value)
+                append_image(contents, item.value)
             elif value := clean_text(item.value):
                 contents.append(OrderedContent(kind="text", value=value))
     return contents
@@ -121,13 +120,10 @@ def parse_post_contents(raw_text: object) -> list[OrderedContent]:
 
 def append_image(
     contents: list[OrderedContent],
-    seen_images: set[str],
     candidate: object,
 ) -> None:
     image_url = normalize_image_url(candidate)
-    image_key = image_dedup_key(image_url)
-    if image_url and image_key and image_key not in seen_images:
-        seen_images.add(image_key)
+    if image_url:
         contents.append(OrderedContent(kind="image", value=image_url))
 
 

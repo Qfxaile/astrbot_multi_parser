@@ -104,7 +104,7 @@ def test_html_body_keeps_text_and_image_order():
     ]
 
 
-def test_html_body_filters_hidden_nodes_and_duplicate_images():
+def test_html_body_filters_hidden_nodes_and_preserves_duplicate_images():
     body = (
         "<style>隐藏样式</style><script>隐藏脚本</script>"
         "<p>正文</p>"
@@ -117,6 +117,7 @@ def test_html_body_filters_hidden_nodes_and_duplicate_images():
     assert blocks == [
         OrderedContent(kind="text", value="正文"),
         OrderedContent(kind="image", value="https://pic1.zhimg.com/a.jpg?x=1"),
+        OrderedContent(kind="image", value="https://pic1.zhimg.com/a.jpg?x=2"),
     ]
 
 
@@ -231,6 +232,10 @@ def test_pin_payload_handles_structured_text_image_and_video():
                     "original_url": "https://pic1.zhimg.com/pin-original.jpg",
                 },
                 {
+                    "type": "image",
+                    "original_url": "https://pic1.zhimg.com/pin-original.jpg",
+                },
+                {
                     "type": "video",
                     "video": {
                         "playlist": {
@@ -248,6 +253,7 @@ def test_pin_payload_handles_structured_text_image_and_video():
     assert result.author == "想法作者"
     assert result.ordered_contents == [
         OrderedContent(kind="text", value="想法正文"),
+        OrderedContent(kind="image", value="https://pic1.zhimg.com/pin-original.jpg"),
         OrderedContent(kind="image", value="https://pic1.zhimg.com/pin-original.jpg"),
     ]
     assert result.video_url == "https://video.zhihu.com/pin.mp4"

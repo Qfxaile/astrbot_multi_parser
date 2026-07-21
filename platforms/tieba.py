@@ -34,7 +34,6 @@ class _TiebaPageParser(HTMLParser):
         self._content_depth = 0
         self._ignored_depth = 0
         self._text_parts: list[str] = []
-        self._image_urls: set[str] = set()
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
         attributes = {key: value or "" for key, value in attrs}
@@ -87,8 +86,7 @@ class _TiebaPageParser(HTMLParser):
                 or attributes.get("data-url")
                 or attributes.get("src")
             )
-            if image_url and image_url not in self._image_urls:
-                self._image_urls.add(image_url)
+            if image_url:
                 self.contents.append(OrderedContent(kind="image", value=image_url))
 
         if tag in {"a", "embed", "source", "video"} and not self.video_url:

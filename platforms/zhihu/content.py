@@ -14,7 +14,6 @@ class ZhihuHTMLParser(HTMLParser):
         self.contents: list[OrderedContent] = []
         self.video_urls: list[str] = []
         self._text_parts: list[str] = []
-        self._seen_images: set[str] = set()
         self._seen_videos: set[str] = set()
         self._ignored_depth = 0
 
@@ -83,9 +82,7 @@ class ZhihuHTMLParser(HTMLParser):
 
     def _append_image(self, candidate: str | None):
         image_url = normalize_media_url(str(candidate or ""), self.page_url)
-        key = media_key(image_url)
-        if image_url and key and key not in self._seen_images:
-            self._seen_images.add(key)
+        if image_url:
             self.contents.append(OrderedContent(kind="image", value=image_url))
 
     def _append_video(self, candidate: str | None):
