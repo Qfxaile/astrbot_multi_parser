@@ -59,6 +59,7 @@
 | `enable_parse_reaction` | 布尔值 | `true` | 识别到受支持链接后，是否给原消息添加表情回应 |
 | `reaction_action` | 字符串 | `set_msg_emoji_like` | OneBot 表情回应动作名，需与协议端保持一致 |
 | `reaction_emoji_id` | 字符串 | `124` | 表情回应使用的表情 ID |
+| `bilibili_cookies` | 文本 | 空 | 可选；用于 B站 页面和接口请求，可提高登录态或风控场景下的解析成功率 |
 | `douyin_cookies` | 文本 | 空 | 可选；缺少 `ttwid` 时会尝试注册匿名会话 |
 | `redbook_cookies` | 文本 | 空 | 可选；可提高部分内容或无水印资源的可用性 |
 | `tieba_cookies` | 文本 | 空 | 可选；用于贴吧页面请求，可降低安全验证导致的解析失败 |

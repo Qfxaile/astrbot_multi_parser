@@ -8,17 +8,19 @@ from astrbot_multi_parser.platforms import bilibili
 async def test_short_video_url_extracts_id_when_redirect_target_returns_412(
     monkeypatch,
 ):
-    parser = bilibili.BilibiliParser({})
+    parser = bilibili.BilibiliParser({"bilibili_cookies": "SESSDATA=secret"})
     short_url = "https://b23.tv/dBRgvHl"
     shared_url = (
         "https://www.bilibili.com/video/BV1VpK56jERg"
         "?buvid=test&share_source=QQ&spmid=united.player-video-detail.0.0"
     )
     requested_urls = []
+    requested_cookies = []
     parsed_video_ids = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requested_urls.append(str(request.url))
+        requested_cookies.append(request.headers.get("Cookie"))
         if str(request.url) == short_url:
             return httpx.Response(
                 302,
@@ -54,6 +56,7 @@ async def test_short_video_url_extracts_id_when_redirect_target_returns_412(
     assert result.title == "视频标题"
     assert parsed_video_ids == ["BV1VpK56jERg"]
     assert requested_urls == [short_url, shared_url]
+    assert requested_cookies == [None, None]
 
 
 @pytest.mark.parametrize(
@@ -358,12 +361,14 @@ def test_article_html_keeps_visible_text_and_image_order():
 async def test_dynamic_and_opus_materialize_original_images(
     monkeypatch, page_url, api_path, payload, expected_referer, assert_temporary_image
 ):
+    api_request = None
     image_request = None
     client_kwargs = None
 
     def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal image_request
+        nonlocal api_request, image_request
         if request.url.path == api_path:
+            api_request = request
             return httpx.Response(200, json=payload, request=request)
         image_request = request
         return httpx.Response(200, content=b"graphic-image", request=request)
@@ -377,7 +382,9 @@ async def test_dynamic_and_opus_materialize_original_images(
 
     monkeypatch.setattr(bilibili.httpx, "AsyncClient", create_client)
 
-    result = await bilibili.BilibiliParser({}).parse(ParseContext(text=page_url))
+    result = await bilibili.BilibiliParser(
+        {"bilibili_cookies": "SESSDATA=graphic-session"}
+    ).parse(ParseContext(text=page_url))
 
     assert [item.kind for item in result.ordered_contents] == ["image"]
     assert_temporary_image(result, result.ordered_contents[0].value, b"graphic-image")
@@ -386,10 +393,16 @@ async def test_dynamic_and_opus_materialize_original_images(
         "https://i0.hdslb.com/dynamic.jpg",
         "https://i0.hdslb.com/opus.jpg",
     }
+    assert api_request is not None
+    assert "SESSDATA=graphic-session" in api_request.headers["Cookie"]
+    assert "Cookie" not in image_request.headers
     assert image_request.headers["Referer"] == expected_referer
     assert client_kwargs is not None
     assert client_kwargs["headers"]["Referer"] == expected_referer
     assert "Mozilla/5.0" in client_kwargs["headers"]["User-Agent"]
+    assert [cookie.domain for cookie in client_kwargs["cookies"].jar] == [
+        ".bilibili.com"
+    ]
 
 
 @pytest.mark.asyncio
@@ -407,10 +420,13 @@ async def test_article_materializes_original_image_and_preserves_failed_slot(
     </div></body></html>
     """
     image_requests = []
+    article_request = None
     client_kwargs = None
 
     def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal article_request
         if request.url.path == "/read/cv789":
+            article_request = request
             return httpx.Response(200, text=html, request=request)
         image_requests.append(request)
         if request.url.path.endswith("failed.jpg"):
@@ -426,7 +442,9 @@ async def test_article_materializes_original_image_and_preserves_failed_slot(
 
     monkeypatch.setattr(bilibili.httpx, "AsyncClient", create_client)
 
-    result = await bilibili.BilibiliParser({}).parse(ParseContext(text=article_url))
+    result = await bilibili.BilibiliParser(
+        {"bilibili_cookies": "SESSDATA=article-session"}
+    ).parse(ParseContext(text=article_url))
 
     assert [(item.kind, item.value) for item in result.ordered_contents[:3]] == [
         ("text", "第一段"),
@@ -439,15 +457,21 @@ async def test_article_materializes_original_image_and_preserves_failed_slot(
         "https://i0.hdslb.com/failed.jpg",
         "https://i0.hdslb.com/working.jpg",
     ]
+    assert article_request is not None
+    assert "SESSDATA=article-session" in article_request.headers["Cookie"]
+    assert all("Cookie" not in request.headers for request in image_requests)
     assert all(request.headers["Referer"] == article_url for request in image_requests)
     assert client_kwargs is not None
     assert client_kwargs["headers"]["Referer"] == article_url
     assert "Mozilla/5.0" in client_kwargs["headers"]["User-Agent"]
+    assert [cookie.domain for cookie in client_kwargs["cookies"].jar] == [
+        ".bilibili.com"
+    ]
 
 
 @pytest.mark.asyncio
 async def test_video_materializes_original_cover(monkeypatch, assert_temporary_image):
-    parser = bilibili.BilibiliParser({})
+    parser = bilibili.BilibiliParser({"bilibili_cookies": "SESSDATA=video-session"})
 
     async def get_video_info(video_id):
         return {
@@ -486,10 +510,74 @@ async def test_video_materializes_original_cover(monkeypatch, assert_temporary_i
     assert result.video_url == "https://video.example/play.mp4"
     assert image_request is not None
     assert str(image_request.url) == "https://i0.hdslb.com/video.jpg"
+    assert "Cookie" not in image_request.headers
     assert image_request.headers["Referer"] == "https://www.bilibili.com"
     assert client_kwargs is not None
     assert client_kwargs["headers"]["Referer"] == "https://www.bilibili.com"
     assert "Mozilla/5.0" in client_kwargs["headers"]["User-Agent"]
+    assert [cookie.domain for cookie in client_kwargs["cookies"].jar] == [
+        ".bilibili.com"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_video_api_requests_use_bilibili_cookie(monkeypatch):
+    requests = []
+    client_kwargs = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/x/web-interface/view":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "title": "视频标题",
+                        "pic": "",
+                        "owner": {"name": "视频作者"},
+                        "desc": "",
+                        "cid": 123,
+                    },
+                },
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {"durl": [{"url": "https://video.example"}]}},
+            request=request,
+        )
+
+    async_client = httpx.AsyncClient
+
+    def create_client(**kwargs):
+        client_kwargs.append(kwargs)
+        return async_client(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(bilibili.httpx, "AsyncClient", create_client)
+    parser = bilibili.BilibiliParser(
+        {"bilibili_cookies": "SESSDATA=api-session; bili_jct=csrf-token"}
+    )
+
+    info = await parser._get_video_info("BV1xx411c7mD")
+    play_url = await parser._get_play_url(str(info["cid"]), "BV1xx411c7mD")
+
+    assert play_url == "https://video.example"
+    assert [request.url.path for request in requests] == [
+        "/x/web-interface/view",
+        "/x/player/playurl",
+    ]
+    assert all(
+        "SESSDATA=api-session" in request.headers["Cookie"] for request in requests
+    )
+    assert all(
+        "bili_jct=csrf-token" in request.headers["Cookie"] for request in requests
+    )
+    assert all(
+        [cookie.domain for cookie in kwargs["cookies"].jar]
+        == [".bilibili.com", ".bilibili.com"]
+        for kwargs in client_kwargs
+    )
 
 
 @pytest.mark.asyncio

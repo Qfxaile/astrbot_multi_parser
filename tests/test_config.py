@@ -11,6 +11,7 @@ PLATFORMS = (
     "zhihu",
 )
 COOKIE_KEYS = (
+    "bilibili_cookies",
     "douyin_cookies",
     "redbook_cookies",
     "tieba_cookies",

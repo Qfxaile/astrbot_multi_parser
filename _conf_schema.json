@@ -121,6 +121,12 @@
     "default": "124",
     "hint": "解析成功时使用的表情 ID。"
   },
+  "bilibili_cookies": {
+    "description": "B站 Cookies",
+    "type": "text",
+    "default": "",
+    "hint": "选填。用于 B站 页面和接口请求，可提高登录态或风控场景下的解析成功率。"
+  },
   "douyin_cookies": {
     "description": "抖音 Cookies",
     "type": "text",

@@ -4,6 +4,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from ..core.http import build_cookies
 from ..models import BaseParser, OrderedContent, ParseContext, ParseResult
 from ..utils import replace_links
 
@@ -168,6 +169,7 @@ class BilibiliParser(BaseParser):
         async with httpx.AsyncClient(
             timeout=self.request_timeout,
             headers=self._headers(referer),
+            cookies=self._cookies(),
         ) as client:
             return await self.materialize_images(result, client, referer)
 
@@ -176,6 +178,7 @@ class BilibiliParser(BaseParser):
         async with httpx.AsyncClient(
             timeout=self.request_timeout,
             headers=self._headers(referer),
+            cookies=self._cookies(),
         ) as client:
             response = await client.get(
                 self.DYNAMIC_API,
@@ -244,6 +247,7 @@ class BilibiliParser(BaseParser):
         async with httpx.AsyncClient(
             timeout=self.request_timeout,
             headers=self._headers(referer),
+            cookies=self._cookies(),
         ) as client:
             response = await client.get(
                 self.OPUS_API,
@@ -311,6 +315,7 @@ class BilibiliParser(BaseParser):
             timeout=self.request_timeout,
             follow_redirects=True,
             headers=self._headers(url),
+            cookies=self._cookies(),
         ) as client:
             response = await client.get(url)
             response.raise_for_status()
@@ -364,7 +369,10 @@ class BilibiliParser(BaseParser):
         else:
             return {"error": "未知ID类型"}
 
-        async with httpx.AsyncClient(timeout=self.request_timeout) as client:
+        async with httpx.AsyncClient(
+            timeout=self.request_timeout,
+            cookies=self._cookies(),
+        ) as client:
             data = (
                 await client.get(
                     api_url, headers=self._headers("https://www.bilibili.com")
@@ -391,7 +399,10 @@ class BilibiliParser(BaseParser):
         else:
             return ""
 
-        async with httpx.AsyncClient(timeout=self.request_timeout) as client:
+        async with httpx.AsyncClient(
+            timeout=self.request_timeout,
+            cookies=self._cookies(),
+        ) as client:
             data = (
                 await client.get(
                     api_url, headers=self._headers("https://www.bilibili.com")
@@ -409,3 +420,9 @@ class BilibiliParser(BaseParser):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:102.0) Gecko/20100101 Firefox/102.0",
             "Referer": referer,
         }
+
+    def _cookies(self) -> httpx.Cookies:
+        """构造仅作用于哔哩哔哩域名的 Cookie Jar。"""
+        return build_cookies(
+            self.config.get("bilibili_cookies", ""), (".bilibili.com",)
+        )
