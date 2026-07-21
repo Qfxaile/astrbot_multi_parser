@@ -88,6 +88,8 @@ class ZhihuParser(BaseParser):
                 page_url,
                 "answers",
                 answer_id,
+                params={"include": "content"},
+                required_fields=("content", "contentHtml", "content_html"),
             )
             return parse_answer_payload(payload)
 
@@ -107,13 +109,21 @@ class ZhihuParser(BaseParser):
                 answers_payload = await requester.get_json(
                     client,
                     f"https://www.zhihu.com/api/v4/questions/{question_id}/answers",
-                    params={"limit": 1, "offset": 0, "sort_by": "default"},
+                    params={
+                        "limit": 1,
+                        "offset": 0,
+                        "sort_by": "default",
+                        "include": "data[*].content",
+                    },
                 )
                 answers = answers_payload.get("data")
                 if isinstance(answers, list):
                     first_answer = next(
                         (item for item in answers if isinstance(item, dict)), None
                     )
+                if first_answer and not first_answer.get("content"):
+                    state = await self._load_initial_state(requester, client, page_url)
+                    first_answer = self._first_entity(state, "answers", question_id)
             except ZhihuRequestError:
                 state = await self._load_initial_state(requester, client, page_url)
                 first_answer = self._first_entity(state, "answers", question_id)
@@ -157,10 +167,16 @@ class ZhihuParser(BaseParser):
         page_url: str,
         entity_name: str,
         entity_id: str,
+        *,
+        params: dict | None = None,
+        required_fields: tuple[str, ...] = (),
     ) -> dict:
         try:
-            payload = await requester.get_json(client, api_url)
-            if payload:
+            payload = await requester.get_json(client, api_url, params=params)
+            if payload and (
+                not required_fields
+                or any(payload.get(field) for field in required_fields)
+            ):
                 return payload
         except ZhihuRequestError:
             pass

@@ -325,6 +325,7 @@ async def test_parse_answer_uses_cookie_only_for_zhihu_and_materializes_image(
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "www.zhihu.com":
             assert request.url.path == "/api/v4/answers/2"
+            assert request.url.params["include"] == "content"
             assert "z_c0=secret" in request.headers.get("cookie", "")
             return httpx.Response(
                 200,
@@ -363,6 +364,7 @@ async def test_parse_question_fetches_default_first_answer(monkeypatch):
                 json={"title": "接口问题", "detail": "<p>问题描述</p>"},
                 request=request,
             )
+        assert request.url.params["include"] == "data[*].content"
         return httpx.Response(
             200,
             json={
@@ -506,3 +508,48 @@ async def test_answer_api_risk_control_falls_back_to_initial_state(monkeypatch):
 
     assert result.title == "页面问题"
     assert result.author == "页面答主"
+
+
+@pytest.mark.asyncio
+async def test_answer_api_without_content_falls_back_to_initial_state(monkeypatch):
+    from astrbot_multi_parser.platforms import ZhihuParser
+
+    answer = {
+        "question": {"title": "页面问题"},
+        "author": {"name": "页面答主"},
+        "content": "<p>完整回答正文</p>",
+    }
+    state = {"initialState": {"entities": {"answers": {"2": answer}}}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v4/answers/2":
+            assert request.url.params["include"] == "content"
+            return httpx.Response(
+                200,
+                json={
+                    "question": {"title": "接口问题"},
+                    "author": {"name": "接口答主"},
+                    "excerpt": "回答摘要",
+                },
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            text=(
+                '<script id="js-initialData" type="application/json">'
+                f"{json.dumps(state)}"
+                "</script>"
+            ),
+            request=request,
+        )
+
+    install_zhihu_mock_client(monkeypatch, handler)
+    result = await ZhihuParser({}).parse(
+        ParseContext(text="https://www.zhihu.com/question/1/answer/2")
+    )
+
+    assert result.title == "页面问题"
+    assert result.author == "页面答主"
+    assert result.ordered_contents == [
+        OrderedContent(kind="text", value="完整回答正文")
+    ]
