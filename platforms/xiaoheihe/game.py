@@ -48,6 +48,7 @@ def build_game_result(
         description=build_game_desc(html_text, game, intro),
         image_urls=image_urls,
         video_url=video_url,
+        keep_video_in_forward=True,
         extra_lines=extra_lines,
     )
 

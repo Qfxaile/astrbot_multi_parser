@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 import httpx
@@ -29,6 +30,44 @@ def test_invalid_legacy_image_slots_are_marked_in_original_order():
         0: "第 1 张图片获取失败：InvalidURL",
         2: "第 3 张图片获取失败：InvalidURL",
     }
+
+
+@pytest.mark.asyncio
+async def test_materialize_images_respects_download_concurrency(
+    monkeypatch, tmp_path
+):
+    from astrbot_multi_parser.core.media import ImageMaterializer
+
+    active_downloads = 0
+    peak_downloads = 0
+
+    async def fake_download(self, client, image_url, referer):
+        nonlocal active_downloads, peak_downloads
+        active_downloads += 1
+        peak_downloads = max(peak_downloads, active_downloads)
+        await asyncio.sleep(0.01)
+        image_path = tmp_path / Path(image_url).name
+        image_path.write_bytes(image_url.encode())
+        active_downloads -= 1
+        return image_path
+
+    monkeypatch.setattr(ImageMaterializer, "_download_image", fake_download)
+    image_urls = [f"https://img.example/{index}.jpg" for index in range(4)]
+    result = models.ParseResult(platform="test", image_urls=image_urls.copy())
+
+    async with httpx.AsyncClient() as client:
+        await models.BaseParser({"image_download_concurrency": 2}).materialize_images(
+            result, client, "https://share.example/post/1"
+        )
+
+    assert peak_downloads == 2
+    assert [Path(value).name for value in result.image_urls] == [
+        "0.jpg",
+        "1.jpg",
+        "2.jpg",
+        "3.jpg",
+    ]
+    result.cleanup_temporary_files()
 
 
 @pytest.mark.asyncio

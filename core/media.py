@@ -1,3 +1,4 @@
+import asyncio
 import ipaddress
 import mimetypes
 from collections.abc import Mapping
@@ -35,6 +36,9 @@ def mark_invalid_legacy_images(
 class ImageMaterializer:
     """安全地将解析结果中的远程图片流式写入临时文件。"""
 
+    DEFAULT_DOWNLOAD_CONCURRENCY = 4
+    MAX_DOWNLOAD_CONCURRENCY = 16
+
     def __init__(
         self,
         config: Mapping[str, object],
@@ -52,6 +56,7 @@ class ImageMaterializer:
         image_number = 0
         try:
             if result.ordered_contents:
+                candidates = []
                 for item in result.ordered_contents:
                     if item.kind not in {"image", "image_error"}:
                         continue
@@ -60,23 +65,31 @@ class ImageMaterializer:
                         continue
                     if item.value.startswith("base64://"):
                         continue
-                    image_url = item.value
-                    try:
-                        image_path = await self._download_image(
-                            client, image_url, referer
-                        )
+                    candidates.append((image_number, item, item.value))
+
+                outcomes = await self._download_images(
+                    client,
+                    [image_url for _, _, image_url in candidates],
+                    referer,
+                )
+                for (number, item, image_url), outcome in zip(
+                    candidates, outcomes, strict=True
+                ):
+                    if isinstance(outcome, Path):
+                        image_path = outcome
                         result.temporary_files.append(image_path)
                         item.value = str(image_path)
-                    except (httpx.HTTPError, httpx.InvalidURL) as exc:
-                        detail = self._image_error_detail(exc)
+                    else:
+                        detail = self._image_error_detail(outcome)
                         item.kind = "image_error"
-                        item.value = f"第 {image_number} 张图片获取失败：{detail}"
+                        item.value = f"第 {number} 张图片获取失败：{detail}"
                         logger.warning(
                             f"图片下载失败 ({self._hostname_label(image_url)}): {detail}"
                         )
                 return result
 
             legacy_index = 0
+            candidates = []
             for field_name in ("cover_urls", "image_urls"):
                 image_values = getattr(result, field_name)
                 for field_index, image_url in enumerate(image_values):
@@ -84,26 +97,84 @@ class ImageMaterializer:
                     if not image_url or image_url.startswith("base64://"):
                         legacy_index += 1
                         continue
-                    try:
-                        image_path = await self._download_image(
-                            client, image_url, referer
+                    candidates.append(
+                        (
+                            image_number,
+                            legacy_index,
+                            image_values,
+                            field_index,
+                            image_url,
                         )
-                        result.temporary_files.append(image_path)
-                        image_values[field_index] = str(image_path)
-                    except (httpx.HTTPError, httpx.InvalidURL) as exc:
-                        image_values[field_index] = ""
-                        detail = self._image_error_detail(exc)
-                        result.image_errors[legacy_index] = (
-                            f"第 {image_number} 张图片获取失败：{detail}"
-                        )
-                        logger.warning(
-                            f"图片下载失败 ({self._hostname_label(image_url)}): {detail}"
-                        )
+                    )
                     legacy_index += 1
+
+            outcomes = await self._download_images(
+                client,
+                [image_url for _, _, _, _, image_url in candidates],
+                referer,
+            )
+            for candidate, outcome in zip(candidates, outcomes, strict=True):
+                number, index, image_values, field_index, image_url = candidate
+                if isinstance(outcome, Path):
+                    image_path = outcome
+                    result.temporary_files.append(image_path)
+                    image_values[field_index] = str(image_path)
+                else:
+                    image_values[field_index] = ""
+                    detail = self._image_error_detail(outcome)
+                    result.image_errors[index] = (
+                        f"第 {number} 张图片获取失败：{detail}"
+                    )
+                    logger.warning(
+                        f"图片下载失败 ({self._hostname_label(image_url)}): {detail}"
+                    )
             return result
         except Exception:
             cleanup_temporary_files(result)
             raise
+
+    async def _download_images(
+        self,
+        client: httpx.AsyncClient,
+        image_urls: list[str],
+        referer: str,
+    ) -> list[Path | Exception]:
+        """并发下载图片，并按输入顺序返回路径或可恢复错误。"""
+        semaphore = asyncio.Semaphore(self._download_concurrency())
+
+        async def download(image_url: str) -> Path | Exception:
+            async with semaphore:
+                try:
+                    return await self._download_image(client, image_url, referer)
+                except Exception as exc:
+                    return exc
+
+        outcomes = await asyncio.gather(*(download(url) for url in image_urls))
+        unexpected = next(
+            (
+                outcome
+                for outcome in outcomes
+                if isinstance(outcome, Exception)
+                and not isinstance(outcome, (httpx.HTTPError, httpx.InvalidURL))
+            ),
+            None,
+        )
+        if unexpected is not None:
+            for outcome in outcomes:
+                if isinstance(outcome, Path):
+                    outcome.unlink(missing_ok=True)
+            raise unexpected
+        return outcomes
+
+    def _download_concurrency(self) -> int:
+        value = self.config.get(
+            "image_download_concurrency", self.DEFAULT_DOWNLOAD_CONCURRENCY
+        )
+        try:
+            concurrency = int(value)
+        except (TypeError, ValueError):
+            concurrency = self.DEFAULT_DOWNLOAD_CONCURRENCY
+        return min(max(concurrency, 1), self.MAX_DOWNLOAD_CONCURRENCY)
 
     async def _download_image(
         self,

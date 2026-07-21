@@ -70,7 +70,7 @@
   "forward_text_threshold": {
     "description": "文字合并阈值",
     "type": "int",
-    "default": 200,
+    "default": 260,
     "hint": "阈值模式下，最终可见文字字符数严格超过该值时合并发送。"
   },
   "request_timeout_seconds": {
@@ -78,6 +78,12 @@
     "type": "int",
     "default": 30,
     "hint": "解析接口请求超时时间，单位为秒。"
+  },
+  "image_download_concurrency": {
+    "description": "图片下载并发数",
+    "type": "int",
+    "default": 4,
+    "hint": "同时下载的图片数量，取值范围 1～16；数值越大速度可能越快，但会占用更多网络连接。"
   },
   "send_video_by_url": {
     "description": "直发视频",

@@ -222,9 +222,9 @@ async def test_exactly_three_images_are_sent_as_one_forward_message(
     nodes = messages[0][0].nodes
     assert len(nodes) == 4
     assert all(isinstance(node, Node) and len(node.content) == 1 for node in nodes)
-    assert isinstance(nodes[0].content[0], Plain)
-    assert nodes[0].content[0].text == "标题"
-    assert all(isinstance(node.content[0], Image) for node in nodes[1:])
+    assert all(isinstance(node.content[0], Image) for node in nodes[:3])
+    assert isinstance(nodes[3].content[0], Plain)
+    assert nodes[3].content[0].text == "标题"
 
 
 @pytest.mark.asyncio
@@ -542,7 +542,7 @@ async def test_negative_thresholds_are_treated_as_zero(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_forward_images_include_video_in_same_forward_message(monkeypatch):
+async def test_threshold_forward_keeps_regular_video_as_separate_message(monkeypatch):
     result = ParseResult(
         platform="test",
         title="摘要",
@@ -561,11 +561,94 @@ async def test_forward_images_include_video_in_same_forward_message(monkeypatch)
 
     messages = [item async for item in plugin.handle_parse(FakeEvent())]
 
+    assert len(messages) == 2
+    assert isinstance(messages[0][0], Nodes)
+    assert not any(
+        isinstance(node.content[0], Video) for node in messages[0][0].nodes
+    )
+    assert isinstance(messages[1][0], Video)
+    assert messages[1][0].file == result.video_url
+
+
+@pytest.mark.asyncio
+async def test_threshold_forward_keeps_xiaoheihe_game_video_inside(monkeypatch):
+    result = ParseResult(
+        platform="xiaoheihe",
+        title="游戏详情",
+        description="游戏简介",
+        image_urls=["base64://1", "base64://2", "base64://3"],
+        video_url="https://example.com/game.mp4",
+        keep_video_in_forward=True,
+    )
+    plugin = make_plugin(result)
+    monkeypatch.setattr(
+        main, "extract_context", lambda event: SimpleNamespace(combined_text="url")
+    )
+
+    async def fake_probe(url):
+        return VideoSizeInfo(size_bytes=1024)
+
+    monkeypatch.setattr(plugin, "_probe_video_size", fake_probe)
+
+    messages = [item async for item in plugin.handle_parse(FakeEvent())]
+
     assert len(messages) == 1
     assert isinstance(messages[0][0], Nodes)
     assert isinstance(messages[0][0].nodes[-1].content[0], Video)
     assert messages[0][0].nodes[-1].content[0].file == result.video_url
-    assert "视频链接" not in messages[0][0].nodes[0].content[0].text
+
+
+@pytest.mark.asyncio
+async def test_always_forward_keeps_regular_video_inside(monkeypatch):
+    result = ParseResult(
+        platform="test",
+        title="摘要",
+        video_url="https://example.com/video.mp4",
+    )
+    plugin = make_plugin(result, forward_mode="always")
+    monkeypatch.setattr(
+        main, "extract_context", lambda event: SimpleNamespace(combined_text="url")
+    )
+
+    async def fake_probe(url):
+        return VideoSizeInfo(size_bytes=1024)
+
+    monkeypatch.setattr(plugin, "_probe_video_size", fake_probe)
+
+    messages = [item async for item in plugin.handle_parse(FakeEvent())]
+
+    assert len(messages) == 1
+    assert isinstance(messages[0][0], Nodes)
+    assert isinstance(messages[0][0].nodes[-1].content[0], Video)
+
+
+@pytest.mark.asyncio
+async def test_forward_description_matches_plain_chain_format(monkeypatch):
+    result = ParseResult(
+        platform="test",
+        title="标题",
+        description="第一行\n第二行",
+        image_urls=["base64://1", "base64://2", "base64://3"],
+    )
+
+    plain_messages = await collect_results(
+        monkeypatch, result, forward_mode="never"
+    )
+    forward_messages = await collect_results(monkeypatch, result)
+
+    plain_chain = plain_messages[0]
+    forward_chain = [node.content[0] for node in forward_messages[0][0].nodes]
+    assert [type(component) for component in forward_chain] == [
+        type(component) for component in plain_chain
+    ]
+    assert [
+        component.text if isinstance(component, Plain) else component.file
+        for component in forward_chain
+    ] == [
+        component.text if isinstance(component, Plain) else component.file
+        for component in plain_chain
+    ]
+    assert forward_chain[-1].text == "标题\n简介:\n第一行\n第二行"
 
 
 @pytest.mark.asyncio
@@ -618,12 +701,13 @@ async def test_video_url_is_only_in_summary_when_direct_send_is_disabled(
 
     assert len(messages) == 1
     nodes = messages[0][0].nodes
-    assert "视频链接: https://example.com/video.mp4" in nodes[0].content[0].text
-    assert all(
-        "视频链接" not in node.content[0].text
-        for node in nodes[1:]
-        if isinstance(node.content[0], Plain)
-    )
+    plain_nodes = [
+        node.content[0] for node in nodes if isinstance(node.content[0], Plain)
+    ]
+    assert sum(
+        "视频链接: https://example.com/video.mp4" in component.text
+        for component in plain_nodes
+    ) == 1
     assert len(forwarded) == 1
 
 

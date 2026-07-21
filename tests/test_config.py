@@ -66,6 +66,15 @@ def test_video_send_decision_defaults_limit_to_50_mb():
     assert "超过限制 50.00 MB" in reason
 
 
+def test_schema_exposes_image_download_concurrency():
+    schema_path = Path(__file__).parents[1] / "_conf_schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+    concurrency = schema["image_download_concurrency"]
+    assert concurrency["type"] == "int"
+    assert concurrency["default"] == 4
+
+
 def test_schema_exposes_forward_delivery_modes_and_thresholds():
     schema_path = Path(__file__).parents[1] / "_conf_schema.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
@@ -80,4 +89,4 @@ def test_schema_exposes_forward_delivery_modes_and_thresholds():
         "始终不合并发送（不推荐 ×）",
     ]
     assert schema["forward_image_threshold"]["default"] == 2
-    assert schema["forward_text_threshold"]["default"] == 200
+    assert schema["forward_text_threshold"]["default"] == 260

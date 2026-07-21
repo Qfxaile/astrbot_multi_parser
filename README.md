@@ -52,6 +52,7 @@
 | `forward_image_threshold` | 整数 | `2` | 阈值模式下，图片数量严格超过该值时合并发送 |
 | `forward_text_threshold` | 整数 | `200` | 阈值模式下，最终可见文字字符数严格超过该值时合并发送 |
 | `request_timeout_seconds` | 整数 | `30` | 平台页面和接口请求超时，单位为秒 |
+| `image_download_concurrency` | 整数 | `4` | 同时下载的图片数量，取值范围为 `1`～`16` |
 | `send_video_by_url` | 布尔值 | `true` | 是否通过远程 URL 直接发送解析到的视频 |
 | `max_video_size_mb` | 浮点数 | `50` | 视频直发体积上限，单位为 MB；小于等于 `0` 表示不限制 |
 | `allow_unknown_video_size` | 布尔值 | `false` | 无法探测视频大小时，是否仍尝试直接发送 |

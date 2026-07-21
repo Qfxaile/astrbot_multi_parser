@@ -87,16 +87,15 @@ class DeliveryService:
         if not self._should_forward_content(event, result, info_chain):
             return [event.chain_result(info_chain)], False
 
-        summary_chain = result.info_chain(
-            include_content=False,
-            include_video_url=include_video_url,
+        forward_components = list(info_chain)
+        video_embedded = (
+            include_video
+            and bool(result.video_url)
+            and (
+                self._forward_mode() == "always"
+                or result.keep_video_in_forward
+            )
         )
-        content_chain = result.info_chain(
-            include_summary=False,
-            include_video_url=include_video_url,
-        )
-        forward_components = [*summary_chain, *content_chain]
-        video_embedded = include_video and bool(result.video_url)
         if video_embedded:
             forward_components.extend(result.video_chain())
         sender_name, sender_id = self.sender_identity(event)
@@ -115,13 +114,7 @@ class DeliveryService:
         if not self._supports_forward_nodes(event):
             return False
 
-        mode = (
-            str(self.config.get("forward_mode", self.DEFAULT_FORWARD_MODE))
-            .strip()
-            .lower()
-        )
-        if mode not in self.FORWARD_MODES:
-            mode = self.DEFAULT_FORWARD_MODE
+        mode = self._forward_mode()
         if mode == "always":
             return True
         if mode == "never":
@@ -139,6 +132,14 @@ class DeliveryService:
             len(component.text) for component in chain if isinstance(component, Plain)
         )
         return result.image_count > image_threshold or text_length > text_threshold
+
+    def _forward_mode(self) -> str:
+        mode = (
+            str(self.config.get("forward_mode", self.DEFAULT_FORWARD_MODE))
+            .strip()
+            .lower()
+        )
+        return mode if mode in self.FORWARD_MODES else self.DEFAULT_FORWARD_MODE
 
     @staticmethod
     def _non_negative_int(value: object, default: int) -> int:

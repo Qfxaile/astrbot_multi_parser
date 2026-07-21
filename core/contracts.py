@@ -34,6 +34,7 @@ class ParseResult:
     ordered_contents: list[OrderedContent] = field(default_factory=list)
     image_errors: dict[int, str] = field(default_factory=dict)
     temporary_files: list[Path] = field(default_factory=list, repr=False)
+    keep_video_in_forward: bool = False
 
     @property
     def image_count(self) -> int:
