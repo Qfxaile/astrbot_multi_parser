@@ -1,4 +1,4 @@
-from astrbot.api.message_components import Image, Plain, Video
+from astrbot.api.message_components import Image, Plain, Record, Video
 
 from .contracts import ParseResult
 
@@ -53,6 +53,11 @@ def render_info_chain(
 
 def render_video_chain(result: ParseResult) -> list:
     return [Video.fromURL(result.video_url)] if result.video_url else []
+
+
+def render_audio_chain(result: ParseResult) -> list:
+    """将远程音频地址转换为 AstrBot 语音组件。"""
+    return [Record.fromURL(result.audio_url)] if result.audio_url else []
 
 
 def _image_component(result: ParseResult, value: str) -> Image:

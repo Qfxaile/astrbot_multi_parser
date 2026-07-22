@@ -123,6 +123,9 @@ class MultiParserPlugin(Star):
                     for message in content_results:
                         yield message
 
+                if result.audio_url:
+                    yield event.chain_result(result.audio_chain())
+
                 if send_video_by_url and result.video_url:
                     if should_send_video and not video_embedded:
                         yield event.chain_result(result.video_chain())

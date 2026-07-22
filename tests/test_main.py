@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from astrbot.api.message_components import Image, Node, Nodes, Plain, Video
+from astrbot.api.message_components import Image, Node, Nodes, Plain, Record, Video
 from astrbot_multi_parser import main
 from astrbot_multi_parser.core.http import CookieAccessError
 from astrbot_multi_parser.main import MultiParserPlugin, VideoSizeInfo
@@ -872,6 +872,23 @@ async def test_non_forward_content_keeps_video_as_separate_message(monkeypatch):
     assert len(messages) == 2
     assert not isinstance(messages[0][0], Nodes)
     assert isinstance(messages[1][0], Video)
+
+
+@pytest.mark.asyncio
+async def test_audio_is_sent_after_track_summary(monkeypatch):
+    result = ParseResult(
+        platform="douyin",
+        title="歌曲标题",
+        audio_url="https://v3-luna.douyinvod.com/song.m4a",
+    )
+
+    messages = await collect_results(monkeypatch, result, forward_mode="never")
+
+    assert len(messages) == 2
+    assert isinstance(messages[0][0], Plain)
+    assert messages[0][0].text == "歌曲标题"
+    assert isinstance(messages[1][0], Record)
+    assert messages[1][0].file == result.audio_url
 
 
 @pytest.mark.asyncio

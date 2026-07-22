@@ -36,6 +36,7 @@ class ParseResult:
     temporary_files: list[Path] = field(default_factory=list, repr=False)
     image_source_urls: dict[str, str] = field(default_factory=dict, repr=False)
     keep_video_in_forward: bool = False
+    audio_url: str = ""
 
     @property
     def image_count(self) -> int:
@@ -74,3 +75,9 @@ class ParseResult:
         from .rendering import render_video_chain
 
         return render_video_chain(self)
+
+    def audio_chain(self) -> list:
+        """构建音频消息组件。"""
+        from .rendering import render_audio_chain
+
+        return render_audio_chain(self)

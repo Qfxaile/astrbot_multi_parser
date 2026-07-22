@@ -3,7 +3,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from astrbot.api.message_components import Image, Plain
+from astrbot.api.message_components import Image, Plain, Record
 from astrbot_multi_parser import models
 
 
@@ -661,6 +661,19 @@ def test_parse_result_preserves_legacy_positional_arguments():
     assert result.extra_lines == ["额外信息"]
     assert result.ordered_contents is ordered_contents
     assert result.image_errors == {}
+
+
+def test_audio_chain_builds_remote_record_component():
+    result = models.ParseResult(
+        platform="douyin",
+        audio_url="https://v3-luna.douyinvod.com/song.m4a",
+    )
+
+    chain = result.audio_chain()
+
+    assert len(chain) == 1
+    assert isinstance(chain[0], Record)
+    assert chain[0].file == result.audio_url
 
 
 def test_info_chain_returns_empty_when_summary_and_content_are_disabled():

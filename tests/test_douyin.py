@@ -3,6 +3,7 @@ import pytest
 from astrbot_multi_parser.core.http import CookieAccessError
 from astrbot_multi_parser.models import ParseContext
 from astrbot_multi_parser.platforms import douyin
+from astrbot_multi_parser.platforms.douyin import music as douyin_music
 
 
 def test_douyin_login_redirect_reports_stale_cookie_without_leak():
@@ -49,12 +50,128 @@ async def test_matches_only_mainland_douyin_urls():
 
     assert await parser.match(ParseContext(text="https://v.douyin.com/abc123"))
     assert await parser.match(
+        ParseContext(text="https://music.douyin.com/qishui/share/track?track_id=123456")
+    )
+    assert await parser.match(
         ParseContext(text="https://www.douyin.com/video/7521023890996514083")
     )
     assert not await parser.match(ParseContext(text="https://vm.tiktok.com/abc123"))
     assert not await parser.match(
         ParseContext(text="https://www.tiktok.com/@user/video/123")
     )
+
+
+def test_qishui_track_html_parses_summary_cover_and_audio():
+    html = """
+    <html>
+      <head>
+        <meta name="description" content="歌曲简介">
+      </head>
+      <body>
+        <h1 class="title">苏北的北</h1>
+        <span class="artist-name-max">小阿娇</span>
+        <img alt="a-image" src="https://p3-luna.douyinpic.com/cover.jpg">
+        <audio id="--luna-view-player--"
+               src="https://v3-luna.douyinvod.com/song.m4a?a=1&amp;b=2"></audio>
+      </body>
+    </html>
+    """
+
+    result = douyin_music.parse_qishui_track_html(html, platform="douyin")
+
+    assert result.title == "苏北的北"
+    assert result.author == "小阿娇"
+    assert result.description == "歌曲简介"
+    assert result.cover_urls == ["https://p3-luna.douyinpic.com/cover.jpg"]
+    assert result.audio_url == ("https://v3-luna.douyinvod.com/song.m4a?a=1&b=2")
+    assert result.extra_lines == []
+
+
+def test_qishui_track_html_rejects_untrusted_audio_url():
+    html = """
+    <h1 class="title">歌曲</h1>
+    <audio id="--luna-view-player--"
+           src="https://user:secret@example.com/song.m4a"></audio>
+    """
+
+    result = douyin_music.parse_qishui_track_html(html, platform="douyin")
+
+    assert result.audio_url == ""
+    assert result.extra_lines == ["无法获取安全的音频直链。"]
+
+
+def test_qishui_track_html_parses_audio_from_router_data():
+    html = r"""
+    <h1 class="title">歌曲</h1>
+    <script async data-script-src="modern-inline">
+    _ROUTER_DATA = {"loaderData":{"track_page":{"audioWithLyricsOption":{
+      "url":"https:\u002F\u002Fv5-se-ex-mc-luna.douyinvod.com\u002Fsong.m4a"
+    }}}}
+    ;window.__INITIALIZED__ = true;
+    </script>
+    """
+
+    result = douyin_music.parse_qishui_track_html(html, platform="douyin")
+
+    assert result.audio_url == ("https://v5-se-ex-mc-luna.douyinvod.com/song.m4a")
+
+
+@pytest.mark.asyncio
+async def test_short_link_redirects_to_qishui_track(
+    monkeypatch, assert_temporary_image
+):
+    short_url = "https://v.douyin.com/XwBGrQNYEYE/"
+    music_url = "https://music.douyin.com/qishui/share/track?track_id=123456"
+    cover_url = "https://p3-luna.douyinpic.com/cover.jpg"
+    audio_url = "https://v3-luna.douyinvod.com/song.m4a"
+    requested_hosts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_hosts.append(request.url.host)
+        if request.url.host == "v.douyin.com":
+            return httpx.Response(
+                302,
+                headers={"Location": music_url},
+                request=request,
+            )
+        if request.url.host == "music.douyin.com":
+            html = f"""
+            <meta name="description" content="歌曲简介">
+            <h1 class="title">歌曲标题</h1>
+            <span class="artist-name-max">歌手</span>
+            <img alt="a-image" src="{cover_url}">
+            <script data-script-src="modern-inline">
+            _ROUTER_DATA = {{"loaderData":{{"track_page":{{
+              "audioWithLyricsOption":{{"url":"{audio_url}"}}
+            }}}}}}
+            </script>
+            """
+            return httpx.Response(200, text=html, request=request)
+        if request.url.host == "p3-luna.douyinpic.com":
+            return httpx.Response(200, content=b"cover-image", request=request)
+        raise AssertionError(f"发生未预期请求: {request.url.host}")
+
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        douyin.httpx,
+        "AsyncClient",
+        lambda **kwargs: real_async_client(
+            transport=httpx.MockTransport(handler), **kwargs
+        ),
+    )
+
+    result = await douyin.DouyinParser({}).parse(ParseContext(text=short_url))
+
+    assert result.title == "歌曲标题"
+    assert result.author == "歌手"
+    assert result.description == "歌曲简介"
+    assert result.audio_url == audio_url
+    assert_temporary_image(result, result.cover_urls[0], b"cover-image")
+    assert requested_hosts == [
+        "v.douyin.com",
+        "music.douyin.com",
+        "p3-luna.douyinpic.com",
+    ]
 
 
 def test_router_data_parses_image_note():

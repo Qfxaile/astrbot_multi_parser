@@ -4,9 +4,10 @@ from urllib.parse import parse_qs, urlparse, urlsplit
 
 import httpx
 
-from ..core.http import build_cookies
-from ..core.media import mark_invalid_legacy_images
-from ..models import BaseParser, ParseContext, ParseResult
+from ...core.http import build_cookies
+from ...core.media import mark_invalid_legacy_images
+from ...models import BaseParser, ParseContext, ParseResult
+from .music import is_qishui_track_url, parse_qishui_track_html
 
 
 class DouyinParser(BaseParser):
@@ -27,6 +28,7 @@ class DouyinParser(BaseParser):
         r"|(?:www|m)\.douyin\.com/(?:video|note)/\d+[^\s]*"
         r"|(?:www\.)?iesdouyin\.com/share/(?:slides|video|note)/\d+[^\s]*"
         r"|jingxuan\.douyin\.com/m/(?:slides|video|note)/\d+[^\s]*"
+        r"|music\.douyin\.com/qishui/share/track\?[^\s]*track_id=\d+[^\s]*"
         r")"
     )
     PLAY_RATIOS = ("1080p", "720p", "540p", "360p")
@@ -67,6 +69,15 @@ class DouyinParser(BaseParser):
                 self.raise_for_response_status(response)
                 self._raise_for_auth_page(response)
                 url = str(response.url)
+
+            if is_qishui_track_url(url):
+                if hostname not in {"v.douyin.com", "jx.douyin.com"}:
+                    response = await client.get(url)
+                    self.raise_for_response_status(response)
+                    self._raise_for_auth_page(response)
+                result = parse_qishui_track_html(response.text, platform=self.name)
+                mark_invalid_legacy_images(result, self.INVALID_IMAGE_URL)
+                return await self.materialize_images(result, client, url)
 
             work_match = re.search(
                 r"/(?:share/|m/)?(?P<type>slides|video|note)/(?P<id>\d+)", url
