@@ -41,6 +41,17 @@ class SavingConfig(dict):
         self.save_calls += 1
 
 
+class FakeBot:
+    def __init__(self, failure=None):
+        self.failure = failure
+        self.actions = []
+
+    async def call_action(self, action, **params):
+        self.actions.append((action, params))
+        if self.failure is not None:
+            raise self.failure
+
+
 class FakeEvent:
     def __init__(
         self,
@@ -50,11 +61,13 @@ class FakeEvent:
         raw_message=None,
         platform_name="aiocqhttp",
         forward_failure_limit=None,
+        bot=None,
     ):
         self.sender_id = sender_id
         self.sender_name = sender_name
         self.platform_name = platform_name
         self.forward_failure_limit = forward_failure_limit
+        self.bot = bot
         self.sent = []
         self.forward_attempt_sizes = []
         self.message_obj = SimpleNamespace(
@@ -339,13 +352,13 @@ async def test_forward_is_split_at_official_node_limit(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rejected_forward_batches_are_retried_without_losing_order(
+async def test_rejected_forward_batch_is_not_split_or_retried(
     monkeypatch,
 ):
-    event = FakeEvent(forward_failure_limit=25)
+    event = FakeEvent(forward_failure_limit=6)
     result = ParseResult(
         platform="test",
-        image_urls=[f"base64://{index}" for index in range(101)],
+        image_urls=[f"base64://{index}" for index in range(7)],
     )
 
     messages = await collect_results(
@@ -355,15 +368,14 @@ async def test_rejected_forward_batches_are_retried_without_losing_order(
         forward_mode="always",
     )
 
-    assert event.forward_attempt_sizes[:2] == [51, 26]
-    assert all(len(message[0].nodes) <= 25 for message in messages)
-    assert [
-        node.content[0].file for message in messages for node in message[0].nodes
-    ] == [f"base64://{index}" for index in range(101)]
+    assert event.forward_attempt_sizes == [7]
+    assert len(messages) == 1
+    assert isinstance(messages[0][0], Plain)
+    assert messages[0][0].text == "fake 合并转发发送失败: forward rejected"
 
 
 @pytest.mark.asyncio
-async def test_rejected_single_forward_node_falls_back_to_plain_delivery(
+async def test_rejected_single_forward_node_is_not_retried(
     monkeypatch,
 ):
     event = FakeEvent(forward_failure_limit=0)
@@ -378,7 +390,64 @@ async def test_rejected_single_forward_node_falls_back_to_plain_delivery(
     assert event.forward_attempt_sizes == [1]
     assert len(messages) == 1
     assert isinstance(messages[0][0], Plain)
-    assert messages[0][0].text == "正文"
+    assert messages[0][0].text == "fake 合并转发发送失败: forward rejected"
+
+
+@pytest.mark.asyncio
+async def test_aiocqhttp_forward_uses_remote_image_url_without_base64(
+    monkeypatch,
+    tmp_path,
+):
+    image_paths = [tmp_path / f"original-{index}.jpg" for index in range(7)]
+    source_urls = [
+        f"https://img.example/original-{index}.jpg" for index in range(7)
+    ]
+    for image_path in image_paths:
+        image_path.write_bytes(b"large-original-image")
+    result = ParseResult(
+        platform="test",
+        image_urls=[str(image_path) for image_path in image_paths],
+        temporary_files=image_paths,
+        image_source_urls={
+            str(image_path.resolve()): source_url
+            for image_path, source_url in zip(
+                image_paths, source_urls, strict=True
+            )
+        },
+    )
+    bot = FakeBot()
+    event = FakeEvent(
+        bot=bot,
+        raw_message={
+            "group_id": 10001,
+            "self_id": 20002,
+            "sender": {"nickname": "测试用户"},
+        },
+    )
+
+    messages = await collect_results(
+        monkeypatch,
+        result,
+        event=event,
+        forward_mode="always",
+    )
+
+    assert messages == []
+    assert len(bot.actions) == 1
+    action, params = bot.actions[0]
+    assert action == "send_group_forward_msg"
+    assert params["group_id"] == 10001
+    assert params["self_id"] == 20002
+    assert len(params["messages"]) == 7
+    assert [
+        node["data"]["content"][0]["data"]["file"]
+        for node in params["messages"]
+    ] == source_urls
+    assert not any(
+        node["data"]["content"][0]["data"]["file"].startswith("base64://")
+        for node in params["messages"]
+    )
+    assert not any(image_path.exists() for image_path in image_paths)
 
 
 @pytest.mark.asyncio

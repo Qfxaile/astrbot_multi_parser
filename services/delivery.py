@@ -2,7 +2,7 @@ from collections.abc import Mapping
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain
-from astrbot.api.message_components import Node, Nodes, Plain
+from astrbot.api.message_components import Image, Node, Nodes, Plain
 
 from ..core.contracts import ParseResult
 
@@ -123,35 +123,120 @@ class DeliveryService:
         ]
 
     async def send_forward_results(
-        self, event: AstrMessageEvent, results: list
+        self,
+        event: AstrMessageEvent,
+        results: list,
+        parse_result: ParseResult,
     ) -> None:
-        """发送合并转发；投递失败时保持顺序递归缩小批次。"""
+        """发送合并转发，只有构建阶段超过节点上限时才会分批。"""
         for result in results:
             chain = getattr(result, "chain", result)
             if len(chain) != 1 or not isinstance(chain[0], Nodes):
                 raise ValueError("合并转发结果结构无效")
-            await self._send_forward_nodes_with_retry(event, chain[0].nodes)
+            nodes = chain[0].nodes
+            if self._can_send_onebot_url_forward(
+                event, nodes, parse_result.image_source_urls
+            ):
+                messages = await self._serialize_onebot_nodes(
+                    nodes, parse_result.image_source_urls
+                )
+                await self._send_onebot_forward_nodes(event, messages)
+                continue
+            await event.send(MessageChain([Nodes(nodes)]))
 
-    async def _send_forward_nodes_with_retry(
-        self,
+    @classmethod
+    def _can_send_onebot_url_forward(
+        cls,
         event: AstrMessageEvent,
         nodes: list[Node],
-    ) -> None:
-        try:
-            await event.send(MessageChain([Nodes(nodes)]))
-            return
-        except Exception as exc:
-            if len(nodes) == 1:
-                logger.warning(f"单节点合并转发失败，降级为普通消息: {exc}")
-                await event.send(MessageChain(list(nodes[0].content)))
-                return
-            middle = (len(nodes) + 1) // 2
-            logger.warning(
-                f"{len(nodes)} 节点合并转发失败，将按顺序拆为 "
-                f"{middle} + {len(nodes) - middle} 节点重试: {exc}"
+        image_source_urls: Mapping[str, str],
+    ) -> bool:
+        """仅在 aiocqhttp 的全部图片都有远程地址时绕过 Base64 序列化。"""
+        if cls._platform_name(event) != "aiocqhttp":
+            return False
+        images = [
+            component
+            for node in nodes
+            for component in node.content
+            if isinstance(component, Image)
+        ]
+        return bool(images) and all(
+            cls._remote_image_url(image, image_source_urls) for image in images
+        )
+
+    @classmethod
+    async def _serialize_onebot_nodes(
+        cls,
+        nodes: list[Node],
+        image_source_urls: Mapping[str, str],
+    ) -> list[dict]:
+        """构造使用远程图片 URL 的 OneBot 节点，避免 WebSocket 携带 Base64。"""
+        messages = []
+        for node in nodes:
+            content = []
+            for component in node.content:
+                if isinstance(component, Image):
+                    content.append(
+                        {
+                            "type": "image",
+                            "data": {
+                                "file": cls._remote_image_url(
+                                    component, image_source_urls
+                                )
+                            },
+                        }
+                    )
+                else:
+                    content.append(await component.to_dict())
+            messages.append(
+                {
+                    "type": "node",
+                    "data": {
+                        "user_id": str(node.uin),
+                        "nickname": node.name,
+                        "content": content,
+                    },
+                }
             )
-        await self._send_forward_nodes_with_retry(event, nodes[:middle])
-        await self._send_forward_nodes_with_retry(event, nodes[middle:])
+        return messages
+
+    @staticmethod
+    def _remote_image_url(
+        image: Image, image_source_urls: Mapping[str, str]
+    ) -> str:
+        if image.path and (source_url := image_source_urls.get(str(image.path))):
+            return source_url
+        image_file = str(image.file or "")
+        if image_file.startswith(("http://", "https://")):
+            return image_file
+        return ""
+
+    async def _send_onebot_forward_nodes(
+        self, event: AstrMessageEvent, messages: list[dict]
+    ) -> None:
+        """将已序列化的 URL 节点直接交给 OneBot，避免 AstrBot 转为 Base64。"""
+        raw = self.raw_message(event)
+        raw = raw if isinstance(raw, dict) else {}
+        routing = {"messages": messages}
+        if self_id := raw.get("self_id"):
+            routing["self_id"] = self_id
+
+        if group_id := raw.get("group_id"):
+            await self.call_onebot(
+                event,
+                "send_group_forward_msg",
+                group_id=int(group_id),
+                **routing,
+            )
+            return
+
+        user_id = raw.get("user_id") or event.get_sender_id()
+        await self.call_onebot(
+            event,
+            "send_private_forward_msg",
+            user_id=int(user_id),
+            **routing,
+        )
 
     @staticmethod
     def is_forward_delivery(results: list) -> bool:
@@ -293,11 +378,14 @@ class DeliveryService:
 
     @classmethod
     def _supports_forward_nodes(cls, event: AstrMessageEvent) -> bool:
+        return cls._platform_name(event) in cls.FORWARD_NODE_PLATFORMS
+
+    @staticmethod
+    def _platform_name(event: AstrMessageEvent) -> str:
         try:
-            platform_name = event.get_platform_name()
+            return str(event.get_platform_name() or "")
         except Exception:
-            return False
-        return platform_name in cls.FORWARD_NODE_PLATFORMS
+            return ""
 
     @staticmethod
     def _raw_forward_node(name: str, user_id: str, text: str) -> dict:

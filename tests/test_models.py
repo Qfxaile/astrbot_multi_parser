@@ -99,6 +99,9 @@ async def test_materialize_images_streams_original_bytes_to_temporary_file(tmp_p
     assert image_path.read_bytes() == b"original-image-bytes"
     assert not result.image_urls[0].startswith("base64://")
     assert result.temporary_files == [image_path]
+    assert result.image_source_urls == {
+        str(image_path.resolve()): "https://img.example/original.webp"
+    }
 
     component = result.info_chain(include_summary=False)[0]
     assert component.file == image_path.resolve().as_uri()
@@ -107,6 +110,7 @@ async def test_materialize_images_streams_original_bytes_to_temporary_file(tmp_p
     result.cleanup_temporary_files()
     assert not image_path.exists()
     assert result.temporary_files == []
+    assert result.image_source_urls == {}
 
 
 @pytest.mark.asyncio

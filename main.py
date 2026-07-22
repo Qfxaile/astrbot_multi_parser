@@ -109,7 +109,16 @@ class MultiParserPlugin(Star):
                 )
                 delivery = self._delivery_service()
                 if delivery.is_forward_delivery(content_results):
-                    await delivery.send_forward_results(event, content_results)
+                    try:
+                        await delivery.send_forward_results(
+                            event, content_results, result
+                        )
+                    except Exception as exc:
+                        logger.warning(f"{parser.name} 合并转发发送失败: {exc}")
+                        yield event.plain_result(
+                            f"{parser.name} 合并转发发送失败: {exc}"
+                        )
+                        return
                 else:
                     for message in content_results:
                         yield message

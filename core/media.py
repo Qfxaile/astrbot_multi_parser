@@ -78,6 +78,7 @@ class ImageMaterializer:
                     if isinstance(outcome, Path):
                         image_path = outcome
                         result.temporary_files.append(image_path)
+                        result.image_source_urls[str(image_path.resolve())] = image_url
                         item.value = str(image_path)
                     else:
                         detail = self._image_error_detail(outcome)
@@ -118,6 +119,7 @@ class ImageMaterializer:
                 if isinstance(outcome, Path):
                     image_path = outcome
                     result.temporary_files.append(image_path)
+                    result.image_source_urls[str(image_path.resolve())] = image_url
                     image_values[field_index] = str(image_path)
                 else:
                     image_values[field_index] = ""
@@ -290,3 +292,4 @@ def cleanup_temporary_files(result: ParseResult) -> None:
         except OSError as exc:
             logger.warning(f"清理临时图片失败 ({path.name}): {exc}")
     result.temporary_files.clear()
+    result.image_source_urls.clear()

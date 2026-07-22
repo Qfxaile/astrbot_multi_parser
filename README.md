@@ -107,7 +107,7 @@ git clone https://github.com/Qfxaile/astrbot_multi_parser.git astrbot_plugin_mul
 
 1. 插件先整理标题、作者、简介等元数据。
 2. Bilibili 图文按正文、图片和图片失败提示在原内容中的顺序发送。
-3. 图片会下载到内存并编码为 Base64，不写入本地文件或缓存。
+3. 图片会先经过安全校验并下载到临时文件，发送完成后立即清理；使用 `aiocqhttp` 合并转发时，插件会直接把已验证的原始图片 URL 交给 OneBot 拉取，避免在 WebSocket 中传输 Base64。
 4. `forward_mode` 可选择以下三种方式：
 
 | 模式 | 处理方式 |
@@ -119,7 +119,10 @@ git clone https://github.com/Qfxaile/astrbot_multi_parser.git astrbot_plugin_mul
 5. `threshold` 模式默认在图片超过 2 张或文字超过 260 字时合并；两个条件满足任意一个即可触发。
 6. 合并转发仅用于 `aiocqhttp` 和 `satori`；其他平台会自动降级为普通消息链。
 7. 单张图片下载失败时，原位置会显示“第 N 张图片获取失败”，其余内容继续发送。
-8. 合并转发会先合并相邻文本并保留图文顺序；超过 QQ 官方 100 节点上限时均衡分批，投递失败时按原顺序缩小批次重试，单节点仍失败则降级为普通消息。
+8. 合并转发会先合并相邻文本并保留图文顺序；只有超过 QQ 官方 100 节点上限时才均衡分批，投递失败或超时不会自动拆分重试。
+
+> [!NOTE]
+> OneBot 协议端必须能够直接访问图片 CDN。部分需要 Cookie 或 Referer 的防盗链图片可能无法由协议端加载，此时应检查协议端网络和对应平台的图片访问限制。
 
 ### 视频内容
 
