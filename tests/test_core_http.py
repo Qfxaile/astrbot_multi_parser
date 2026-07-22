@@ -1,8 +1,14 @@
+import httpx
+import pytest
 from astrbot_multi_parser.core.http import (
+    CookieAccessError,
+    build_cookie_access_error,
     build_cookies,
     parse_cookie_header,
+    raise_for_cookie_access,
     request_timeout,
 )
+from astrbot_multi_parser.core.parser import BaseParser
 
 
 def test_parse_cookie_header_keeps_values_containing_equals():
@@ -27,3 +33,63 @@ def test_build_cookies_scopes_each_pair_to_all_domains():
 def test_request_timeout_accepts_numeric_config():
     assert request_timeout({"request_timeout_seconds": "12.5"}) == 12.5
     assert request_timeout({}) == 30.0
+
+
+@pytest.mark.parametrize(
+    ("cookie_value", "expected"),
+    [
+        ("", "可能需要配置 Cookies"),
+        ("session=secret", "配置的 Cookies 可能已失效"),
+    ],
+)
+def test_cookie_access_error_distinguishes_missing_and_stale_cookie(
+    cookie_value, expected
+):
+    error = build_cookie_access_error("测试平台", cookie_value)
+
+    assert expected in str(error)
+    assert "secret" not in str(error)
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_raise_for_cookie_access_handles_only_confirmed_statuses(status_code):
+    response = httpx.Response(
+        status_code,
+        request=httpx.Request("GET", "https://example.com/content"),
+    )
+
+    with pytest.raises(CookieAccessError, match="可能需要配置 Cookies"):
+        raise_for_cookie_access(
+            response,
+            platform="测试平台",
+            cookie_value="",
+        )
+
+
+def test_raise_for_cookie_access_leaves_other_http_errors_to_caller():
+    response = httpx.Response(
+        404,
+        request=httpx.Request("GET", "https://example.com/content"),
+    )
+
+    raise_for_cookie_access(
+        response,
+        platform="测试平台",
+        cookie_value="session=secret",
+    )
+
+
+def test_base_parser_preserves_non_cookie_http_errors():
+    class TestParser(BaseParser):
+        display_name = "测试平台"
+        cookie_config_key = "test_cookies"
+
+    response = httpx.Response(
+        404,
+        request=httpx.Request("GET", "https://example.com/missing"),
+    )
+
+    with pytest.raises(httpx.HTTPStatusError, match="404"):
+        TestParser({"test_cookies": "session=secret"}).raise_for_response_status(
+            response
+        )

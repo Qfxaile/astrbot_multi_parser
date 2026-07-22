@@ -18,6 +18,8 @@ class ZhihuParser(BaseParser):
     """解析知乎问题、回答、专栏文章和想法。"""
 
     name = "zhihu"
+    display_name = "知乎"
+    cookie_config_key = "zhihu_cookies"
     image_host_suffixes = ("zhimg.com",)
     ANSWER_PATTERN = (
         r"https?://(?:www\.)?zhihu\.com/question/(?P<question_id>\d+)/"

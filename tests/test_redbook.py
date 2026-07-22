@@ -2,8 +2,20 @@ import json
 
 import httpx
 import pytest
+from astrbot_multi_parser.core.http import CookieAccessError
 from astrbot_multi_parser.models import ParseContext
 from astrbot_multi_parser.platforms import redbook
+
+
+def test_redbook_security_page_reports_missing_cookie():
+    parser = redbook.RedBookParser({})
+    response = httpx.Response(
+        200,
+        request=httpx.Request("GET", "https://www.xiaohongshu.com/404/security-check"),
+    )
+
+    with pytest.raises(CookieAccessError, match="可能需要配置 Cookies"):
+        parser._raise_for_auth_page(response)
 
 
 @pytest.mark.asyncio

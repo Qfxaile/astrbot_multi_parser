@@ -224,7 +224,7 @@ async def test_parse_post_reports_api_error_without_token_leak(monkeypatch):
     install_mock_client(monkeypatch, handler)
     parser = XiaoheiheParser({"xiaoheihe_cookies": "x_xhh_tokenid=Bsecret"})
 
-    with pytest.raises(ValueError, match="link/tree 请求失败") as exc_info:
+    with pytest.raises(ValueError, match="Cookies 可能已失效") as exc_info:
         await parser.parse(
             ParseContext(text="https://www.xiaoheihe.cn/app/bbs/link/abc123")
         )
@@ -405,7 +405,7 @@ async def test_parse_game_reports_detail_api_error(monkeypatch):
     install_mock_client(monkeypatch, handler)
     parser = XiaoheiheParser({"xiaoheihe_cookies": "x_xhh_tokenid=Bdevice123"})
 
-    with pytest.raises(ValueError, match="get_game_detail 请求失败"):
+    with pytest.raises(ValueError, match="Cookies 可能已失效"):
         await parser.parse(
             ParseContext(text="https://www.xiaoheihe.cn/app/topic/game/pc/730")
         )

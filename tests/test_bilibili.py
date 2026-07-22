@@ -1,7 +1,24 @@
 import httpx
 import pytest
+from astrbot_multi_parser.core.http import CookieAccessError
 from astrbot_multi_parser.models import ParseContext, ParseResult
 from astrbot_multi_parser.platforms import bilibili
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        ({}, "可能需要配置 Cookies"),
+        ({"bilibili_cookies": "SESSDATA=secret"}, "Cookies 可能已失效"),
+    ],
+)
+def test_bilibili_auth_business_code_reports_cookie_hint(config, expected):
+    parser = bilibili.BilibiliParser(config)
+
+    with pytest.raises(CookieAccessError, match=expected) as exc_info:
+        parser._parse_dynamic_payload({"code": -101, "message": "账号未登录"})
+
+    assert "secret" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio

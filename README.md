@@ -99,6 +99,8 @@ git clone https://github.com/Qfxaile/astrbot_multi_parser.git astrbot_plugin_mul
 > [!WARNING]
 > Cookie 属于敏感凭据。请仅通过 AstrBot 配置页面提供，不要写入代码、README、Issue、测试样例或日志。提交问题前请先删除 URL 查询参数中的令牌及日志中的个人信息。
 
+当平台明确返回未登录、鉴权拒绝或安全验证结果，并最终无法通过公开页面回退获取内容时，插件会提示配置 Cookies；如果已经配置，则提示 Cookies 可能已失效。普通网络错误、内容删除和单张图片下载失败不会显示该提示。
+
 ## 消息发送策略
 
 ### 图文内容

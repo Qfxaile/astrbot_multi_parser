@@ -11,6 +11,8 @@ from ..models import BaseParser, ParseContext, ParseResult
 
 class DouyinParser(BaseParser):
     name = "douyin"
+    display_name = "抖音"
+    cookie_config_key = "douyin_cookies"
     image_host_suffixes = (
         "douyinpic.com",
         "byteimg.com",
@@ -30,6 +32,7 @@ class DouyinParser(BaseParser):
     PLAY_RATIOS = ("1080p", "720p", "540p", "360p")
     TTWID_REGISTER_URL = "https://ttwid.bytedance.com/ttwid/union/register/"
     SLIDES_URL = "https://www.iesdouyin.com/web/api/v2/aweme/slidesinfo/"
+    AUTH_PATH_MARKERS = ("/passport/", "/verify", "/security/")
     IOS_HEADERS = {
         "User-Agent": (
             "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
@@ -61,7 +64,8 @@ class DouyinParser(BaseParser):
             hostname = urlparse(url).hostname or ""
             if hostname in {"v.douyin.com", "jx.douyin.com"}:
                 response = await client.get(url)
-                response.raise_for_status()
+                self.raise_for_response_status(response)
+                self._raise_for_auth_page(response)
                 url = str(response.url)
 
             work_match = re.search(
@@ -82,14 +86,15 @@ class DouyinParser(BaseParser):
                     self.SLIDES_URL,
                     params={"aweme_ids": f"[{work_id}]", "request_source": "200"},
                 )
-                response.raise_for_status()
+                self.raise_for_response_status(response)
                 result = self._parse_slides_data(response.json())
                 share_url = f"https://www.iesdouyin.com/share/{work_type}/{work_id}/"
             else:
                 await self._ensure_ttwid(client)
                 share_url = f"https://www.iesdouyin.com/share/{work_type}/{work_id}/"
                 response = await client.get(share_url, headers={"Referer": share_url})
-                response.raise_for_status()
+                self.raise_for_response_status(response)
+                self._raise_for_auth_page(response)
                 router_data = self._extract_router_data(response.text)
                 result = self._parse_router_data(router_data)
 
@@ -302,14 +307,14 @@ class DouyinParser(BaseParser):
                 "fid": "",
             },
         )
-        response.raise_for_status()
+        self.raise_for_response_status(response)
         body = response.json()
         if callback_url := body.get("redirect_url"):
             callback = await client.get(
                 callback_url,
                 headers={"Referer": "https://www.iesdouyin.com/"},
             )
-            callback.raise_for_status()
+            self.raise_for_response_status(callback)
         if not any(cookie.name == "ttwid" for cookie in client.cookies.jar):
             raise ValueError("抖音匿名 ttwid 注册失败")
 
@@ -345,3 +350,9 @@ class DouyinParser(BaseParser):
                 return int(matched.group(1))
         content_length = headers.get("Content-Length", "")
         return int(content_length) if content_length.isdigit() else 0
+
+    def _raise_for_auth_page(self, response: httpx.Response) -> None:
+        """识别分享页被重定向到登录或安全验证页面的情况。"""
+        path = response.url.path.lower()
+        if any(marker in path for marker in self.AUTH_PATH_MARKERS):
+            raise self.cookie_access_error()

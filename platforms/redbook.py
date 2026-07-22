@@ -11,6 +11,8 @@ from ..models import BaseParser, ParseContext, ParseResult
 
 class RedBookParser(BaseParser):
     name = "redbook"
+    display_name = "小红书"
+    cookie_config_key = "redbook_cookies"
     image_host_suffixes = ("xhscdn.com", "xiaohongshu.com")
     INVALID_IMAGE_URL = "unsafe-image-url"
     PATTERN = (
@@ -20,6 +22,7 @@ class RedBookParser(BaseParser):
         r")(?:\?[^\s#]*)?"
     )
     NOTE_PATH_PATTERN = r"/(?:explore|discovery/item)/(?P<note_id>[^/?]+)"
+    AUTH_PATH_MARKERS = ("/404/security-check", "/login", "/website-login")
     EXPLORE_HEADERS = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 "
@@ -62,9 +65,11 @@ class RedBookParser(BaseParser):
             if (urlparse(url).hostname or "") == "xhslink.com":
                 response = await client.get(url, follow_redirects=False)
                 if not response.has_redirect_location:
-                    response.raise_for_status()
+                    self.raise_for_response_status(response)
                     raise ValueError("小红书短链未返回重定向地址")
                 url = str(response.url.join(response.headers["Location"]))
+                if self._is_auth_url(url):
+                    raise self.cookie_access_error()
                 if (urlparse(url).hostname or "") != "www.xiaohongshu.com":
                     raise ValueError("小红书短链重定向到不受支持的地址")
 
@@ -89,13 +94,15 @@ class RedBookParser(BaseParser):
                 finally:
                     client.headers.clear()
                     client.headers.update(original_headers)
-                response.raise_for_status()
+                self.raise_for_response_status(response)
+                self._raise_for_auth_page(response)
                 state = self._extract_initial_state(response.text)
                 result = self._parse_explore_state(state, note_id)
                 content_url = explore_url
             except (httpx.HTTPError, ValueError, KeyError):
                 response = await client.get(discovery_url)
-                response.raise_for_status()
+                self.raise_for_response_status(response)
+                self._raise_for_auth_page(response)
                 state = self._extract_initial_state(response.text)
                 result = self._parse_discovery_state(state)
                 content_url = discovery_url
@@ -105,6 +112,16 @@ class RedBookParser(BaseParser):
             )
             mark_invalid_legacy_images(result, self.INVALID_IMAGE_URL)
             return await self.materialize_images(result, client, image_referer)
+
+    def _raise_for_auth_page(self, response: httpx.Response) -> None:
+        """识别小红书跳转后的安全验证或登录页面。"""
+        if self._is_auth_url(str(response.url)):
+            raise self.cookie_access_error()
+
+    @classmethod
+    def _is_auth_url(cls, url: str) -> bool:
+        path = urlparse(url).path.lower()
+        return any(marker in path for marker in cls.AUTH_PATH_MARKERS)
 
     @staticmethod
     def _extract_initial_state(html: str) -> dict:

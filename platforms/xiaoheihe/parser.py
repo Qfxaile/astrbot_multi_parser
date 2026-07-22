@@ -30,6 +30,8 @@ class XiaoheiheParser(BaseParser):
     """负责小黑盒 URL 路由、会话准备与网络请求。"""
 
     name = "xiaoheihe"
+    display_name = "小黑盒"
+    cookie_config_key = "xiaoheihe_cookies"
     image_host_suffixes = ("max-c.com", "xiaoheihe.cn")
     CHAR_TABLE = RequestSigner.CHAR_TABLE
     BBS_WEB_PATTERN = (
@@ -131,12 +133,12 @@ class XiaoheiheParser(BaseParser):
             response = await client.post(
                 "https://fp-it.portal101.cn/deviceprofile/v4", json=payload
             )
-            response.raise_for_status()
+            self.raise_for_response_status(response)
             body = response.json()
         detail = body.get("detail") if isinstance(body, dict) else None
         device_id = detail.get("deviceId") if isinstance(detail, dict) else None
         if not device_id:
-            raise ValueError("小黑盒 deviceprofile 未返回 deviceId")
+            raise self.cookie_access_error()
         return str(device_id)
 
     async def _parse_post_by_id(self, link_id: str) -> ParseResult:
@@ -168,9 +170,10 @@ class XiaoheiheParser(BaseParser):
                 params=params,
                 headers={"Cookie": f"x_xhh_tokenid={request_context['x_xhh_tokenid']}"},
             )
-            response.raise_for_status()
+            self.raise_for_response_status(response)
             payload = response.json()
             if not isinstance(payload, dict) or payload.get("status") != "ok":
+                self._raise_for_payload_cookie_error(payload)
                 raise ValueError("小黑盒 link/tree 请求失败")
             result_root = payload.get("result")
             if not isinstance(result_root, dict):
@@ -206,13 +209,14 @@ class XiaoheiheParser(BaseParser):
                 },
                 headers={"Cookie": f"x_xhh_tokenid={request_context['x_xhh_tokenid']}"},
             )
-            detail_response.raise_for_status()
+            self.raise_for_response_status(detail_response)
             detail_payload = detail_response.json()
             if (
                 not isinstance(detail_payload, dict)
                 or detail_payload.get("status") != "ok"
                 or not isinstance(detail_payload.get("result"), dict)
             ):
+                self._raise_for_payload_cookie_error(detail_payload)
                 raise ValueError("小黑盒 get_game_detail 请求失败")
             game = detail_payload["result"]
             steam_appid = pick_steam_appid(game, appid)
@@ -235,6 +239,23 @@ class XiaoheiheParser(BaseParser):
 
     def _sign_path(self, path: str) -> dict[str, str | int]:
         return self._signer.sign_path(path)
+
+    def _raise_for_payload_cookie_error(self, payload: object) -> None:
+        """识别小黑盒业务载荷中的登录、令牌和权限错误。"""
+        if not isinstance(payload, dict):
+            return
+        message = str(payload.get("msg") or payload.get("message") or "").lower()
+        markers = (
+            "denied",
+            "unauthorized",
+            "forbidden",
+            "login",
+            "token",
+            "登录",
+            "权限",
+        )
+        if any(marker in message for marker in markers):
+            raise self.cookie_access_error()
 
     def _ov(self, path: str, timestamp: int, nonce: str) -> str:
         return self._signer.ov(path, timestamp, nonce)

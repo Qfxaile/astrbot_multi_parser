@@ -1,7 +1,21 @@
 import httpx
 import pytest
+from astrbot_multi_parser.core.http import CookieAccessError
 from astrbot_multi_parser.models import ParseContext
 from astrbot_multi_parser.platforms import douyin
+
+
+def test_douyin_login_redirect_reports_stale_cookie_without_leak():
+    parser = douyin.DouyinParser({"douyin_cookies": "sessionid=secret"})
+    response = httpx.Response(
+        200,
+        request=httpx.Request("GET", "https://www.douyin.com/passport/general/login"),
+    )
+
+    with pytest.raises(CookieAccessError, match="Cookies 可能已失效") as exc_info:
+        parser._raise_for_auth_page(response)
+
+    assert "secret" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio

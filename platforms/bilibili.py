@@ -98,6 +98,9 @@ class _ArticleHTMLParser(HTMLParser):
 
 class BilibiliParser(BaseParser):
     name = "bilibili"
+    display_name = "B站"
+    cookie_config_key = "bilibili_cookies"
+    cookie_failure_status_codes = frozenset({401, 403, 412})
     image_host_suffixes = ("hdslb.com",)
     SHORT_PATTERN = r"https?://(?:bili2233\.cn|b23\.tv)/[a-zA-Z0-9]+"
     ID_PATTERN = r"(BV[0-9A-Za-z]{10}|av\d+)"
@@ -110,6 +113,7 @@ class BilibiliParser(BaseParser):
     DYNAMIC_API = "https://api.bilibili.com/x/polymer/web-dynamic/v1/detail"
     OPUS_API = "https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/detail"
     ARTICLE_API = "https://api.bilibili.com/x/article/view"
+    COOKIE_FAILURE_CODES = {-101, -111, -352, -412}
 
     async def match(self, context: ParseContext) -> bool:
         text = context.combined_text
@@ -143,6 +147,7 @@ class BilibiliParser(BaseParser):
                 response = await client.get(short_match.group(0), headers=headers)
             final_url = str(response.url)
             if final_url == short_match.group(0):
+                self.raise_for_response_status(response)
                 return ParseResult(platform=self.name, error="B站短链未发生跳转。")
             return await self.parse(ParseContext(text=final_url))
 
@@ -185,7 +190,7 @@ class BilibiliParser(BaseParser):
                 self.DYNAMIC_API,
                 params={"id": dynamic_id},
             )
-            response.raise_for_status()
+            self.raise_for_response_status(response)
             result = self._parse_dynamic_payload(response.json())
             return await self.materialize_images(result, client, referer)
 
@@ -201,6 +206,7 @@ class BilibiliParser(BaseParser):
         异常:
             ValueError: 响应中不包含动态条目时抛出。
         """
+        self._raise_for_api_cookie_error(payload)
         if payload.get("code") not in (None, 0):
             raise ValueError(str(payload.get("message") or "B站动态请求失败"))
         item = (payload.get("data") or {}).get("item") or {}
@@ -264,7 +270,7 @@ class BilibiliParser(BaseParser):
                 self.OPUS_API,
                 params={"id": opus_id},
             )
-            response.raise_for_status()
+            self.raise_for_response_status(response)
             payload = response.json()
             data = payload.get("data") or {}
             if data.get("fallback"):
@@ -272,7 +278,7 @@ class BilibiliParser(BaseParser):
                     self.DYNAMIC_API,
                     params={"id": opus_id},
                 )
-                response.raise_for_status()
+                self.raise_for_response_status(response)
                 dynamic_payload = response.json()
                 item = (dynamic_payload.get("data") or {}).get("item") or {}
                 modules = item.get("modules") or {}
@@ -289,7 +295,7 @@ class BilibiliParser(BaseParser):
                         self.ARTICLE_API,
                         params={"id": article_id},
                     )
-                    response.raise_for_status()
+                    self.raise_for_response_status(response)
                     result = self._parse_article_payload(response.json())
                 else:
                     result = self._parse_dynamic_payload(dynamic_payload)
@@ -309,6 +315,7 @@ class BilibiliParser(BaseParser):
         异常:
             ValueError: 响应中不包含图文条目时抛出。
         """
+        self._raise_for_api_cookie_error(payload)
         if payload.get("code") not in (None, 0):
             raise ValueError(str(payload.get("message") or "B站图文请求失败"))
         item = (payload.get("data") or {}).get("item") or {}
@@ -372,6 +379,7 @@ class BilibiliParser(BaseParser):
 
     def _parse_article_payload(self, payload: dict) -> ParseResult:
         """将传统专栏接口载荷转换为包含完整正文的解析结果。"""
+        self._raise_for_api_cookie_error(payload)
         if payload.get("code") not in (None, 0):
             raise ValueError(str(payload.get("message") or "B站专栏请求失败"))
         data = payload.get("data") or {}
@@ -413,7 +421,7 @@ class BilibiliParser(BaseParser):
                 self.ARTICLE_API,
                 params={"id": article_id},
             )
-            response.raise_for_status()
+            self.raise_for_response_status(response)
             result = self._parse_article_payload(response.json())
             return await self.materialize_images(result, client, url)
 
@@ -466,11 +474,12 @@ class BilibiliParser(BaseParser):
             timeout=self.request_timeout,
             cookies=self._cookies(),
         ) as client:
-            data = (
-                await client.get(
-                    api_url, headers=self._headers("https://www.bilibili.com")
-                )
-            ).json()
+            response = await client.get(
+                api_url, headers=self._headers("https://www.bilibili.com")
+            )
+            self.raise_for_response_status(response)
+            data = response.json()
+        self._raise_for_api_cookie_error(data)
         if data.get("code") != 0:
             return {"error": f"获取视频信息失败: {data.get('message')}"}
 
@@ -496,11 +505,12 @@ class BilibiliParser(BaseParser):
             timeout=self.request_timeout,
             cookies=self._cookies(),
         ) as client:
-            data = (
-                await client.get(
-                    api_url, headers=self._headers("https://www.bilibili.com")
-                )
-            ).json()
+            response = await client.get(
+                api_url, headers=self._headers("https://www.bilibili.com")
+            )
+            self.raise_for_response_status(response)
+            data = response.json()
+        self._raise_for_api_cookie_error(data)
         return (
             data.get("data", {}).get("durl", [{}])[0].get("url", "")
             if data.get("code") == 0
@@ -519,3 +529,9 @@ class BilibiliParser(BaseParser):
         return build_cookies(
             self.config.get("bilibili_cookies", ""), (".bilibili.com",)
         )
+
+    def _raise_for_api_cookie_error(self, payload: object) -> None:
+        """识别 B站业务响应中的未登录、鉴权失败和风控错误码。"""
+        code = payload.get("code") if isinstance(payload, dict) else None
+        if code in self.COOKIE_FAILURE_CODES:
+            raise self.cookie_access_error()

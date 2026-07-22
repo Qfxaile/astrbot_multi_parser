@@ -69,6 +69,8 @@ class WeiboParser(BaseParser):
     """解析微博状态、视频页、长文章和分享链接。"""
 
     name = "weibo"
+    display_name = "微博"
+    cookie_config_key = "weibo_cookies"
     image_host_suffixes = ("sinaimg.cn", "sinaimg.com")
     STATUS_PATTERNS = (
         r"https?://(?:www\.)?weibo\.com/\d+/(?P<desktop_id>[0-9A-Za-z]+)",
@@ -102,6 +104,7 @@ class WeiboParser(BaseParser):
         ),
         "Accept": "text/html,application/xhtml+xml,application/json,*/*",
     }
+    AUTH_PATH_MARKERS = ("/login", "/passport/", "/signin")
 
     async def match(self, context: ParseContext) -> bool:
         return any(
@@ -184,10 +187,12 @@ class WeiboParser(BaseParser):
             cookies=self._cookies(),
         ) as client:
             response = await client.get(url)
-            response.raise_for_status()
+            self.raise_for_response_status(response)
         final_url = str(response.url)
         if final_url == url:
             raise ValueError("微博分享链接未发生跳转")
+        if self._is_auth_url(final_url):
+            raise self.cookie_access_error()
         if not self._is_trusted_weibo_url(final_url) or not any(
             re.search(pattern, final_url) for pattern in self.PATTERNS
         ):
@@ -207,8 +212,10 @@ class WeiboParser(BaseParser):
                 "https://card.weibo.com/article/m/aj/detail",
                 data={"_rid": str(uuid4()), "id": article_id, "_t": int(time() * 1000)},
             )
-            response.raise_for_status()
-            result = self._parse_article_payload(response.json())
+            self.raise_for_response_status(response)
+            payload = response.json()
+            self._raise_for_payload_cookie_error(payload)
+            result = self._parse_article_payload(payload)
             return await self.materialize_images(result, client, referer)
 
     @classmethod
@@ -254,8 +261,10 @@ class WeiboParser(BaseParser):
                     separators=(",", ":"),
                 ),
             )
-            response.raise_for_status()
-            result = self._parse_video_payload(response.json())
+            self.raise_for_response_status(response)
+            payload = response.json()
+            self._raise_for_payload_cookie_error(payload)
+            result = self._parse_video_payload(payload)
             return await self.materialize_images(result, client, referer)
 
     @classmethod
@@ -345,6 +354,22 @@ class WeiboParser(BaseParser):
         text = re.sub(r"[ \t]+\n", "\n", text)
         text = re.sub(r"\n[ \t]+", "\n", text)
         return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+    @classmethod
+    def _is_auth_url(cls, url: str) -> bool:
+        path = urlparse(url).path.lower()
+        return any(marker in path for marker in cls.AUTH_PATH_MARKERS)
+
+    def _raise_for_payload_cookie_error(self, payload: object) -> None:
+        """识别微博业务载荷明确返回的登录和鉴权错误。"""
+        if not isinstance(payload, dict):
+            return
+        message = str(
+            payload.get("msg") or payload.get("message") or payload.get("errmsg") or ""
+        ).lower()
+        markers = ("login", "cookie", "未登录", "请登录", "权限")
+        if any(marker in message for marker in markers):
+            raise self.cookie_access_error()
 
     @classmethod
     def _select_video_url(cls, page_info: object) -> str:

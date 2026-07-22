@@ -195,6 +195,8 @@ class TiebaParser(BaseParser):
     """解析百度贴吧普通帖子页面的楼主首帖。"""
 
     name = "tieba"
+    display_name = "贴吧"
+    cookie_config_key = "tieba_cookies"
     image_host_suffixes = ("baidu.com", "bdimg.com", "bdstatic.com", "bcebos.com")
     THREAD_PATTERN = re.compile(
         r"https?://(?:www\.)?tieba\.baidu\.com/p/(?P<thread_id>\d+)"
@@ -248,11 +250,10 @@ class TiebaParser(BaseParser):
                 params={"see_lz": "1", "pn": "1"},
                 headers=request_headers,
             )
+            if response.status_code in {401, 403}:
+                return self._cookie_failure_result()
             if 300 <= response.status_code < 400:
-                return ParseResult(
-                    platform=self.name,
-                    error="贴吧帖子页面发生重定向，可能需要配置有效 Cookies。",
-                )
+                return self._cookie_failure_result()
             response.raise_for_status()
             result = self._parse_page(response.text, thread_id)
             if result.error:
@@ -279,10 +280,7 @@ class TiebaParser(BaseParser):
     def _parse_page(self, html_text: str, thread_id: str) -> ParseResult:
         lowered_html = html_text.lower()
         if any(marker in lowered_html for marker in self.SECURITY_MARKERS):
-            return ParseResult(
-                platform=self.name,
-                error="贴吧页面触发百度安全验证，请配置有效 Cookies 后重试。",
-            )
+            return self._cookie_failure_result()
         if any(marker in html_text for marker in self.DELETED_MARKERS):
             return ParseResult(platform=self.name, error="该贴吧帖子已被删除。")
         if any(marker in html_text for marker in self.UNAVAILABLE_MARKERS):
@@ -307,3 +305,7 @@ class TiebaParser(BaseParser):
                 [] if parser.contents or parser.video_url else ["贴吧首帖正文为空。"]
             ),
         )
+
+    def _cookie_failure_result(self) -> ParseResult:
+        """生成不包含 Cookie 内容的贴吧访问失败结果。"""
+        return ParseResult(platform=self.name, error=str(self.cookie_access_error()))

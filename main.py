@@ -4,6 +4,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 
 from .core.contracts import ParseResult
+from .core.http import CookieAccessError
 from .services.configuration import (
     build_parsers,
     enabled_parsers,
@@ -126,6 +127,10 @@ class MultiParserPlugin(Star):
                         event, result, "已按配置不直接发送视频"
                     ):
                         yield fallback
+                return
+            except CookieAccessError as exc:
+                logger.warning(f"{parser.name} Cookie 访问失败: {exc}")
+                yield event.plain_result(str(exc))
                 return
             except Exception as exc:
                 logger.warning(f"{parser.name} 解析失败: {exc}")

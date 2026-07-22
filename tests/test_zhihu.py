@@ -4,6 +4,7 @@ from urllib.parse import quote
 
 import httpx
 import pytest
+from astrbot_multi_parser.core.http import CookieAccessError
 from astrbot_multi_parser.models import OrderedContent, ParseContext
 from astrbot_multi_parser.platforms.zhihu import content as zhihu_content
 from astrbot_multi_parser.platforms.zhihu import request as zhihu_request
@@ -22,6 +23,17 @@ from astrbot_multi_parser.platforms.zhihu.handlers import (
     parse_pin_payload,
     parse_question_payload,
 )
+
+
+@pytest.mark.asyncio
+async def test_zhihu_page_forbidden_reports_missing_cookie():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="blocked", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        requester = zhihu_request.ZhihuRequest({})
+        with pytest.raises(CookieAccessError, match="可能需要配置 Cookies"):
+            await requester.get_page(client, "https://www.zhihu.com/question/1")
 
 
 def test_answer_content_is_parsed_only_once(monkeypatch):

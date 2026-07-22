@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 
 import httpx
 
-from ...core.http import build_cookies, request_timeout
+from ...core.http import (
+    build_cookie_access_error,
+    build_cookies,
+    raise_for_cookie_access,
+    request_timeout,
+)
 
 
 class ZhihuRequestError(ValueError):
@@ -12,6 +18,9 @@ class ZhihuRequestError(ValueError):
 
 
 class ZhihuRequest:
+    DISPLAY_NAME = "知乎"
+    COOKIE_CONFIG_KEY = "zhihu_cookies"
+    AUTH_PATH_MARKERS = ("/signin", "/account/unhuman", "/captcha")
     HEADERS = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -35,7 +44,11 @@ class ZhihuRequest:
         )
 
     def _cookies(self) -> httpx.Cookies:
-        return build_cookies(self.config.get("zhihu_cookies", ""), (".zhihu.com",))
+        return build_cookies(self._cookie_value(), (".zhihu.com",))
+
+    def _cookie_value(self) -> object:
+        """读取知乎 Cookie 原始配置，仅供核心 Cookie 工具消费。"""
+        return self.config.get(self.COOKIE_CONFIG_KEY, "")
 
     async def get_json(self, client, url: str, *, params: dict | None = None) -> dict:
         response = await client.get(url, params=params)
@@ -54,14 +67,26 @@ class ZhihuRequest:
             url,
             headers={"Accept": "text/html,application/xhtml+xml,*/*"},
         )
+        raise_for_cookie_access(
+            response,
+            platform=self.DISPLAY_NAME,
+            cookie_value=self._cookie_value(),
+        )
         if response.status_code >= 400:
             raise ZhihuRequestError(f"知乎页面请求失败（{response.status_code}）")
+        self._raise_for_auth_page(response)
         return response.text
 
     async def expand_share(self, client, url: str) -> str:
         response = await client.get(url)
+        raise_for_cookie_access(
+            response,
+            platform=self.DISPLAY_NAME,
+            cookie_value=self._cookie_value(),
+        )
         if response.status_code >= 400:
             raise ZhihuRequestError(f"知乎分享链接请求失败（{response.status_code}）")
+        self._raise_for_auth_page(response)
         final_url = str(response.url)
         if final_url == url:
             raise ZhihuRequestError("知乎分享链接未发生跳转")
@@ -70,3 +95,12 @@ class ZhihuRequest:
     @staticmethod
     def redact_error_message(value: str) -> str:
         return re.sub(r"https?://\S+", "[已隐藏 URL]", value)
+
+    def _raise_for_auth_page(self, response: httpx.Response) -> None:
+        """识别知乎跳转后的登录和人机验证页面。"""
+        path = urlparse(str(response.url)).path.lower()
+        if any(marker in path for marker in self.AUTH_PATH_MARKERS):
+            raise build_cookie_access_error(
+                self.DISPLAY_NAME,
+                self._cookie_value(),
+            )

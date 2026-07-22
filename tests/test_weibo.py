@@ -2,9 +2,23 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from astrbot_multi_parser.core.http import CookieAccessError
 from astrbot_multi_parser.models import ParseContext
 from astrbot_multi_parser.platforms import weibo
 from astrbot_multi_parser.platforms.weibo import WeiboParser
+
+
+def test_weibo_cookie_api_forbidden_reports_stale_cookie_without_leak():
+    parser = WeiboParser({"weibo_cookies": "SUB=secret"})
+    response = httpx.Response(
+        403,
+        request=httpx.Request("GET", "https://card.weibo.com/article/api"),
+    )
+
+    with pytest.raises(CookieAccessError, match="Cookies 可能已失效") as exc_info:
+        parser.raise_for_response_status(response)
+
+    assert "secret" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio

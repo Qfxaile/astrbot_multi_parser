@@ -4,6 +4,7 @@ import httpx
 import pytest
 from astrbot.api.message_components import Image, Node, Nodes, Plain, Video
 from astrbot_multi_parser import main
+from astrbot_multi_parser.core.http import CookieAccessError
 from astrbot_multi_parser.main import MultiParserPlugin, VideoSizeInfo
 from astrbot_multi_parser.models import OrderedContent, ParseResult
 
@@ -19,6 +20,16 @@ class FakeParser:
 
     async def parse(self, context):
         return self.result
+
+
+class FailingParser:
+    name = "fake"
+
+    async def match(self, context):
+        return True
+
+    async def parse(self, context):
+        raise CookieAccessError("测试平台", configured=False)
 
 
 class SavingConfig(dict):
@@ -188,6 +199,22 @@ async def collect_results(monkeypatch, result, event=None, **config):
 async def collect_plugin_results(plugin, event):
     yielded = [item async for item in plugin.handle_parse(event)]
     return [*event.sent, *yielded]
+
+
+@pytest.mark.asyncio
+async def test_handle_parse_outputs_cookie_failure_without_generic_prefix(monkeypatch):
+    monkeypatch.setattr(
+        main, "extract_context", lambda event: SimpleNamespace(combined_text="url")
+    )
+    plugin = make_plugin(ParseResult(platform="fake"))
+    plugin.parsers = {"fake": FailingParser()}
+
+    messages = await collect_plugin_results(plugin, FakeEvent())
+
+    assert messages[0][0].text == (
+        "测试平台内容获取失败，可能需要配置 Cookies，请在插件配置中填写后重试。"
+    )
+    assert "fake 解析失败" not in messages[0][0].text
 
 
 @pytest.mark.asyncio
