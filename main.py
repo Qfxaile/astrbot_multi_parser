@@ -134,11 +134,6 @@ class MultiParserPlugin(Star):
                             event, result, video_reason
                         ):
                             yield fallback
-                elif result.video_url:
-                    async for fallback in self._forward_with_fallback(
-                        event, result, "已按配置不直接发送视频"
-                    ):
-                        yield fallback
                 return
             except CookieAccessError as exc:
                 logger.warning(f"{parser.name} Cookie 访问失败: {exc}")
@@ -161,7 +156,7 @@ class MultiParserPlugin(Star):
         try:
             await self._send_forward_links(event, result, reason)
         except Exception as exc:
-            logger.warning(f"合并转发解析链接失败: {exc}")
+            logger.warning(f"视频链接发送失败: {exc}")
             yield event.plain_result(
-                f"{reason}\n合并转发发送失败: {exc}\n视频链接: {result.video_url}"
+                f"{reason}\n视频链接发送失败: {exc}\n视频链接: {result.video_url}"
             )

@@ -5,5 +5,3 @@ short_desc: 自动解析七大内容平台的分享链接。
 version: v0.3.0
 author: Qfxaile
 repo: "https://github.com/Qfxaile/astrbot_multi_parser"
-support_platforms:
-  - aiocqhttp

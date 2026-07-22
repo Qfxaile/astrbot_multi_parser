@@ -7,6 +7,7 @@ from astrbot_multi_parser import main
 from astrbot_multi_parser.core.http import CookieAccessError
 from astrbot_multi_parser.main import MultiParserPlugin, VideoSizeInfo
 from astrbot_multi_parser.models import OrderedContent, ParseResult
+from astrbot_multi_parser.services.delivery import DeliveryService
 
 
 class FakeParser:
@@ -399,9 +400,7 @@ async def test_aiocqhttp_forward_uses_remote_image_url_without_base64(
     tmp_path,
 ):
     image_paths = [tmp_path / f"original-{index}.jpg" for index in range(7)]
-    source_urls = [
-        f"https://img.example/original-{index}.jpg" for index in range(7)
-    ]
+    source_urls = [f"https://img.example/original-{index}.jpg" for index in range(7)]
     for image_path in image_paths:
         image_path.write_bytes(b"large-original-image")
     result = ParseResult(
@@ -410,9 +409,7 @@ async def test_aiocqhttp_forward_uses_remote_image_url_without_base64(
         temporary_files=image_paths,
         image_source_urls={
             str(image_path.resolve()): source_url
-            for image_path, source_url in zip(
-                image_paths, source_urls, strict=True
-            )
+            for image_path, source_url in zip(image_paths, source_urls, strict=True)
         },
     )
     bot = FakeBot()
@@ -440,8 +437,7 @@ async def test_aiocqhttp_forward_uses_remote_image_url_without_base64(
     assert params["self_id"] == 20002
     assert len(params["messages"]) == 7
     assert [
-        node["data"]["content"][0]["data"]["file"]
-        for node in params["messages"]
+        node["data"]["content"][0]["data"]["file"] for node in params["messages"]
     ] == source_urls
     assert not any(
         node["data"]["content"][0]["data"]["file"].startswith("base64://")
@@ -606,6 +602,76 @@ async def test_satori_supports_forward_nodes(monkeypatch):
 
     assert len(messages) == 1
     assert isinstance(messages[0][0], Nodes)
+
+
+@pytest.mark.asyncio
+async def test_reaction_is_skipped_outside_onebot():
+    bot = FakeBot()
+    event = FakeEvent(
+        bot=bot,
+        platform_name="telegram",
+        raw_message={"message_id": 123},
+    )
+
+    await DeliveryService({"enable_parse_reaction": True}).react_success(event)
+
+    assert bot.actions == []
+
+
+@pytest.mark.asyncio
+async def test_onebot_reaction_still_calls_configured_action():
+    bot = FakeBot()
+    event = FakeEvent(bot=bot, raw_message={"message_id": 123})
+
+    await DeliveryService({"enable_parse_reaction": True}).react_success(event)
+
+    assert bot.actions == [
+        ("set_msg_emoji_like", {"message_id": 123, "emoji_id": "124"})
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("platform_name", ["telegram", "future_adapter"])
+async def test_video_fallback_uses_plain_message_on_generic_platform(platform_name):
+    bot = FakeBot()
+    event = FakeEvent(bot=bot, platform_name=platform_name)
+    result = ParseResult(
+        platform="测试平台",
+        title="测试标题",
+        video_url="https://example.com/video.mp4",
+    )
+
+    await DeliveryService({}).send_forward_links(event, result, "视频超过大小限制")
+
+    assert bot.actions == []
+    assert len(event.sent) == 1
+    assert len(event.sent[0]) == 1
+    assert isinstance(event.sent[0][0], Plain)
+    assert event.sent[0][0].text == (
+        "测试平台 解析链接\n"
+        "标题: 测试标题\n"
+        "说明: 视频超过大小限制\n"
+        "视频链接: https://example.com/video.mp4"
+    )
+
+
+@pytest.mark.asyncio
+async def test_video_fallback_uses_nodes_on_satori():
+    event = FakeEvent(platform_name="satori")
+    result = ParseResult(
+        platform="测试平台",
+        title="测试标题",
+        video_url="https://example.com/video.mp4",
+    )
+
+    await DeliveryService({}).send_forward_links(event, result, "视频超过大小限制")
+
+    assert len(event.sent) == 1
+    assert isinstance(event.sent[0][0], Nodes)
+    assert [node.content[0].text for node in event.sent[0][0].nodes] == [
+        "测试平台 解析链接\n标题: 测试标题\n说明: 视频超过大小限制",
+        "视频直链:\nhttps://example.com/video.mp4",
+    ]
 
 
 @pytest.mark.asyncio
@@ -926,7 +992,7 @@ async def test_video_url_is_only_in_summary_when_direct_send_is_disabled(
         )
         == 1
     )
-    assert len(forwarded) == 1
+    assert forwarded == []
 
 
 @pytest.mark.asyncio

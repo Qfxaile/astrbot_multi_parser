@@ -8,8 +8,9 @@ from ..core.contracts import ParseResult
 
 
 class DeliveryService:
-    """封装 AstrBot 消息组件编排与 OneBot 平台调用。"""
+    """封装 AstrBot 跨平台消息组件编排与平台特有增强。"""
 
+    ONEBOT_PLATFORM = "aiocqhttp"
     FORWARD_NODE_PLATFORMS = {"aiocqhttp", "satori"}
     FORWARD_MODES = {"always", "threshold", "never"}
     DEFAULT_FORWARD_MODE = "threshold"
@@ -41,6 +42,8 @@ class DeliveryService:
 
     async def react_success(self, event: AstrMessageEvent) -> None:
         if not bool(self.config.get("enable_parse_reaction", True)):
+            return
+        if self._platform_name(event) != self.ONEBOT_PLATFORM:
             return
 
         message_id = self.message_id(event)
@@ -152,7 +155,7 @@ class DeliveryService:
         image_source_urls: Mapping[str, str],
     ) -> bool:
         """仅在 aiocqhttp 的全部图片都有远程地址时绕过 Base64 序列化。"""
-        if cls._platform_name(event) != "aiocqhttp":
+        if cls._platform_name(event) != cls.ONEBOT_PLATFORM:
             return False
         images = [
             component
@@ -201,9 +204,7 @@ class DeliveryService:
         return messages
 
     @staticmethod
-    def _remote_image_url(
-        image: Image, image_source_urls: Mapping[str, str]
-    ) -> str:
+    def _remote_image_url(image: Image, image_source_urls: Mapping[str, str]) -> str:
         if image.path and (source_url := image_source_urls.get(str(image.path))):
             return source_url
         image_file = str(image.file or "")
@@ -317,6 +318,7 @@ class DeliveryService:
     async def send_forward_links(
         self, event: AstrMessageEvent, result: ParseResult, reason: str
     ) -> None:
+        """按适配器能力发送视频链接，非转发平台降级为普通文本。"""
         sender_name, sender_id = self.sender_identity(event, prefer_raw_nickname=True)
         summary_lines = [
             f"{result.platform} 解析链接",
@@ -327,11 +329,28 @@ class DeliveryService:
         if reason:
             summary_lines.append(f"说明: {reason}")
 
+        summary_text = "\n".join(summary_lines)
+        video_text = f"视频直链:\n{result.video_url}"
+        platform_name = self._platform_name(event)
+        if platform_name != self.ONEBOT_PLATFORM and self._supports_forward_nodes(
+            event
+        ):
+            message_nodes = [
+                Node(content=[Plain(text)], name=sender_name, uin=sender_id)
+                for text in (summary_text, video_text)
+            ]
+            await event.send(MessageChain([Nodes(message_nodes)]))
+            return
+
+        if platform_name != self.ONEBOT_PLATFORM:
+            text = "\n".join([*summary_lines, f"视频链接: {result.video_url}"])
+            await event.send(MessageChain([Plain(text)]))
+            return
+
+        # OneBot 原生接口允许发送文本节点，并能保留现有的群聊/私聊路由行为。
         nodes = [
-            self._raw_forward_node(sender_name, sender_id, "\n".join(summary_lines)),
-            self._raw_forward_node(
-                sender_name, sender_id, f"视频直链:\n{result.video_url}"
-            ),
+            self._raw_forward_node(sender_name, sender_id, summary_text),
+            self._raw_forward_node(sender_name, sender_id, video_text),
         ]
         raw = self.raw_message(event)
         raw = raw if isinstance(raw, dict) else {}

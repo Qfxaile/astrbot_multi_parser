@@ -44,7 +44,9 @@
 
 ### 消息适配器
 
-合并转发节点支持 `aiocqhttp` 和 `satori`；其他 AstrBot 适配器会尝试降级为普通消息链，但未经过完整兼容性验证。表情回应和视频超限后的 OneBot 合并转发只在兼容的 OneBot 协议端可用。
+插件不限制消息适配器名单。只要适配器能够产生标准 `AstrMessageEvent` 并发送 AstrBot 统一消息链，就可以触发解析和接收结果；AstrBot 后续新增的适配器也会默认走这条通用路径，无需修改插件配置。
+
+文本与图片不按消息平台分支，统一通过 AstrBot 标准组件发送；音频和视频使用 `Record`、`Video` 组件，最终能力和体积限制仍取决于目标平台。合并转发节点仅对 AstrBot 当前实现了该组件的 `aiocqhttp` 和 `satori` 启用，其他适配器自动使用普通消息链。表情回应是 OneBot v11 专属增强，不会在其他平台调用协议端 API。
 
 ### 环境要求
 
@@ -86,9 +88,7 @@ git clone https://github.com/Qfxaile/astrbot_multi_parser.git astrbot_plugin_mul
 | `max_video_size_mb` | 浮点数 | `50` | 视频直发体积上限，单位为 MB；小于等于 `0` 表示不限制 |
 | `allow_unknown_video_size` | 布尔值 | `false` | 无法探测视频大小时，是否仍尝试直接发送 |
 | `size_check_timeout_seconds` | 浮点数 | `10` | 视频大小探测超时，单位为秒 |
-| `enable_parse_reaction` | 布尔值 | `true` | 识别到受支持链接后，是否给原消息添加表情回应 |
-| `reaction_action` | 字符串 | `set_msg_emoji_like` | OneBot 表情回应动作名，需与协议端保持一致 |
-| `reaction_emoji_id` | 字符串 | `124` | 表情回应使用的表情 ID |
+| `enable_parse_reaction` | 布尔值 | `true` | 识别到受支持链接后，是否通过 OneBot v11 给原消息添加表情回应 |
 | `bilibili_cookies` | 文本 | 空 | 可选；用于 B站 页面和接口请求，可提高登录态或风控场景下的解析成功率 |
 | `douyin_cookies` | 文本 | 空 | 可选；缺少 `ttwid` 时会尝试注册匿名会话 |
 | `redbook_cookies` | 文本 | 空 | 可选；可提高部分内容或无水印资源的可用性 |
@@ -118,7 +118,7 @@ git clone https://github.com/Qfxaile/astrbot_multi_parser.git astrbot_plugin_mul
 | `never` | 始终使用普通消息链，不推荐，可能造成刷屏 |
 
 5. `threshold` 模式默认在图片超过 2 张或文字超过 260 字时合并；两个条件满足任意一个即可触发。
-6. 合并转发仅用于 `aiocqhttp` 和 `satori`；其他平台会自动降级为普通消息链。
+6. 合并转发仅用于 `aiocqhttp` 和 `satori`；其他平台自动使用普通消息链，不会调用 OneBot API。
 7. 单张图片下载失败时，原位置会显示“第 N 张图片获取失败”，其余内容继续发送。
 8. 合并转发会先合并相邻文本并保留图文顺序；只有超过 QQ 官方 100 节点上限时才均衡分批，投递失败或超时不会自动拆分重试。
 
@@ -132,12 +132,12 @@ git clone https://github.com/Qfxaile/astrbot_multi_parser.git astrbot_plugin_mul
 | 检查结果 | 处理方式 |
 | --- | --- |
 | 文件大小未超过 `max_video_size_mb` | 通过远程 URL 单独发送视频 |
-| 文件大小超过限制 | 使用 OneBot 合并转发发送解析链接 |
-| 文件大小未知，且不允许未知大小 | 使用 OneBot 合并转发发送解析链接 |
+| 文件大小超过限制 | OneBot 使用原生转发、Satori 使用节点消息，其他平台发送普通文本解析链接 |
+| 文件大小未知，且不允许未知大小 | 按消息平台能力发送解析链接 |
 | 文件大小未知，但允许未知大小 | 尝试通过远程 URL 发送视频 |
-| 合并转发调用失败 | 降级为普通文本，附带失败原因和视频链接 |
+| 解析链接投递失败 | 降级为被动普通文本，附带失败原因和视频链接 |
 
-插件会先发送作品信息，再处理视频。即使视频发送失败，已经解析到的标题和封面仍会保留。
+插件会先发送作品信息，再处理视频。关闭 `send_video_by_url` 时，视频 URL 只在作品摘要中出现一次；即使视频发送失败，已经解析到的标题和封面仍会保留。
 
 ### 音频内容
 
@@ -148,7 +148,7 @@ git clone https://github.com/Qfxaile/astrbot_multi_parser.git astrbot_plugin_mul
 <details>
 <summary><strong>为什么解析成功了，却没有直接发出视频？</strong></summary>
 
-视频可能超过 `max_video_size_mb`，也可能无法通过 `HEAD` 或 `Range` 获取大小。此时默认改用合并转发发送解析链接。可以根据协议端能力调整 `max_video_size_mb` 或 `allow_unknown_video_size`。
+视频可能超过 `max_video_size_mb`，也可能无法通过 `HEAD` 或 `Range` 获取大小。此时插件会按消息平台能力发送解析链接；不支持合并转发的平台使用普通文本。可以根据适配器能力调整 `max_video_size_mb` 或 `allow_unknown_video_size`。
 
 </details>
 
@@ -169,7 +169,7 @@ git clone https://github.com/Qfxaile/astrbot_multi_parser.git astrbot_plugin_mul
 <details>
 <summary><strong>为什么表情回应没有出现？</strong></summary>
 
-表情回应依赖 OneBot 客户端支持 `reaction_action` 指定的动作。动作不可用、消息 ID 缺失或调用失败时只记录日志，不会中断内容解析。
+表情回应仅适用于 OneBot v11，并使用插件内置的回应动作和表情 ID。其他消息平台会跳过该增强；协议端不支持、消息 ID 缺失或调用失败时只记录日志，不会中断内容解析。
 
 </details>
 
@@ -237,7 +237,8 @@ Set-Location astrbot_plugin_multi_parser
 - 平台页面和公开接口发生变化后，对应解析器可能需要同步更新。
 - 远程视频能否发送，取决于协议端及目标聊天平台是否支持远程视频 URL。
 - 汽水音乐音频能否发送，取决于协议端是否支持远程音频 URL，以及临时 CDN 地址是否仍在有效期内。
-- 内容合并转发目前仅对 `aiocqhttp` 和 `satori` 启用。
+- 内容合并转发目前仅对 `aiocqhttp` 和 `satori` 启用，其他适配器使用普通消息链。
+- 各消息平台对远程音频、视频、单条消息长度和媒体数量的限制不同；插件无法绕过平台自身限制。
 - 视频链接的有效期、防盗链策略和可访问区域由内容平台决定。
 
 ## 贡献与安全
@@ -249,6 +250,8 @@ Set-Location astrbot_plugin_multi_parser
 ## 参考项目与致谢
 
 - [AstrBot](https://github.com/AstrBotDevs/AstrBot)：插件运行平台与开发 API。本项目遵循其插件目录、元数据、异步网络、日志和调试规范。
+- [AstrBot 消息发送指南](https://docs.astrbot.app/dev/star/guides/send-message.html)：统一消息链、富媒体组件与合并转发能力说明。
+- [AstrBot 消息平台指南](https://docs.astrbot.app/platform/start.html)：当前内置消息平台及接入文档。
 - [Zhalslar/astrbot_plugin_parser](https://github.com/Zhalslar/astrbot_plugin_parser)：微博、小黑盒和知乎解析实现的参考来源；小黑盒签名算法与匿名设备指纹请求参数在其 MIT 许可实现基础上改写。
 
 参考范围包括 `platforms/weibo.py`、`platforms/xiaoheihe/` 和 `platforms/zhihu/`。上游项目采用 [MIT License](https://github.com/Zhalslar/astrbot_plugin_parser/blob/master/LICENSE)。感谢上述项目及其贡献者。

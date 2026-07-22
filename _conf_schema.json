@@ -95,7 +95,7 @@
     "description": "视频大小上限",
     "type": "float",
     "default": 50,
-    "hint": "直接发送视频的最大体积，单位 MB；小于等于 0 表示不限制。超过后改用合并转发发送解析链接。"
+    "hint": "直接发送视频的最大体积，单位 MB；小于等于 0 表示不限制。超过后按消息平台能力发送解析链接。"
   },
   "allow_unknown_video_size": {
     "description": "允许未知大小",
@@ -113,19 +113,7 @@
     "description": "解析回应",
     "type": "bool",
     "default": true,
-    "hint": "解析成功后给原消息添加表情回应。"
-  },
-  "reaction_action": {
-    "description": "回应动作",
-    "type": "string",
-    "default": "set_msg_emoji_like",
-    "hint": "OneBot 表情回应动作名，不同协议端可能不同。"
-  },
-  "reaction_emoji_id": {
-    "description": "回应表情 ID",
-    "type": "string",
-    "default": "124",
-    "hint": "解析成功时使用的表情 ID。"
+    "hint": "解析成功后给原消息添加表情回应，仅 OneBot v11 适配器可用。"
   },
   "bilibili_cookies": {
     "description": "B站 Cookies",
