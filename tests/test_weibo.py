@@ -4,8 +4,8 @@ import httpx
 import pytest
 from astrbot_multi_parser.core.http import CookieAccessError
 from astrbot_multi_parser.models import ParseContext
-from astrbot_multi_parser.platforms import weibo
 from astrbot_multi_parser.platforms.weibo import WeiboParser
+from astrbot_multi_parser.platforms.weibo import parser as weibo
 
 
 def test_weibo_cookie_api_forbidden_reports_stale_cookie_without_leak():

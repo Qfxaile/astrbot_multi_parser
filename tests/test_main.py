@@ -204,6 +204,27 @@ async def test_platform_login_delegates_chinese_platform_name_in_private_chat():
 
 
 @pytest.mark.asyncio
+async def test_platform_login_delegates_weibo_chinese_platform_name():
+    class FakeAuthentication:
+        def __init__(self):
+            self.calls = []
+
+        async def login(self, event, platform_name):
+            self.calls.append((event, platform_name))
+            return "微博登录成功，Cookies 已保存。"
+
+    plugin = make_plugin(ParseResult(platform="fake"))
+    authentication = FakeAuthentication()
+    plugin._authentication = authentication
+    event = FakeEvent()
+
+    messages = [item async for item in plugin.platform_login(event, "微博")]
+
+    assert messages[0][0].text == "微博登录成功，Cookies 已保存。"
+    assert authentication.calls == [(event, "微博")]
+
+
+@pytest.mark.asyncio
 async def test_handle_parse_outputs_cookie_failure_without_generic_prefix(monkeypatch):
     monkeypatch.setattr(
         main, "extract_context", lambda event: SimpleNamespace(combined_text="url")
