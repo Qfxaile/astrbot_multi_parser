@@ -29,6 +29,11 @@
         "type": "bool",
         "default": true
       },
+      "wechat": {
+        "description": "微信",
+        "type": "bool",
+        "default": true
+      },
       "xiaoheihe": {
         "description": "小黑盒",
         "type": "bool",
@@ -44,7 +49,7 @@
   "enabled_platforms": {
     "description": "旧版启用平台",
     "type": "list",
-    "default": ["bilibili", "douyin", "redbook", "tieba", "weibo", "xiaoheihe", "zhihu"],
+    "default": ["bilibili", "douyin", "redbook", "tieba", "weibo", "wechat", "xiaoheihe", "zhihu"],
     "invisible": true
   },
   "platform_switches_migrated": {
@@ -144,6 +149,12 @@
     "type": "text",
     "default": "",
     "hint": "选填。仅用于需要登录态的微博页面请求。"
+  },
+  "wechat_yuanbao_cookies": {
+    "description": "腾讯元宝 Cookies",
+    "type": "text",
+    "default": "",
+    "hint": "解析视频号短链时必填。登录 yuanbao.tencent.com 后复制 Cookies；仅发送到腾讯元宝域。"
   },
   "xiaoheihe_cookies": {
     "description": "小黑盒 Cookies",

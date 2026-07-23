@@ -1,6 +1,6 @@
 # AstrBot 多平台内容解析器
 
-> 自动识别聊天消息中的 Bilibili、抖音、小红书、贴吧、微博、小黑盒和知乎链接，并发送作品信息、正文图片、视频或音频。
+> 自动识别聊天消息中的 Bilibili、抖音、小红书、贴吧、微博、微信、小黑盒和知乎链接，并发送作品信息、正文图片、视频或音频。
 
 <p align="center">
   <img src="logo.png" alt="icon" width="180">
@@ -20,12 +20,12 @@
 ## 功能概览
 
 - **自动识别链接**：无需命令，直接发送受支持的链接或分享卡片即可触发解析。
-- **覆盖七个平台**：支持 Bilibili、抖音、小红书、贴吧、微博、小黑盒和知乎的常见视频、图文及分享链接。
+- **覆盖八个平台**：支持 Bilibili、抖音、小红书、贴吧、微博、微信、小黑盒和知乎的常见视频、图文及分享链接。
 - **保留原图质量**：图片在内存中下载后以原始字节发送，不主动缩放或转码。
 - **灵活组织内容**：可选择始终合并、超过图片或文字阈值时合并，或始终普通发送。
 - **控制视频体积**：发送前探测远程视频大小，超过限制时改为发送解析链接。
 - **解析音乐分享**：识别抖音短链跳转的汽水音乐单曲，发送歌曲简介、封面和音频。
-- **按需配置 Cookie**：所有平台 Cookie 均为可选项，可提高受登录态或风控影响内容的解析成功率。
+- **按需配置 Cookie**：大多数平台 Cookie 为可选项；视频号短链需要腾讯元宝 Web Cookie 换取官方预览令牌。
 
 ## 支持范围
 
@@ -36,6 +36,7 @@
 | 小红书 | 视频笔记 | 图文笔记 | `xhslink.com` | 部分 JSON 分享卡片 |
 | 贴吧 | 首帖视频 | 楼主首帖正文 | - | `tieba.baidu.com/p/<帖子ID>` |
 | 微博 | 普通视频、微博视频页、TV | 普通微博、转发微博、长文章 | `mapp.api.weibo.cn` | 桌面端和移动端微博 |
+| 微信 | 视频号视频 | 微信公众号文章 | `weixin.qq.com/sph` | 已带 `token/eid` 的视频号预览长链 |
 | 小黑盒 | 帖子视频、游戏视频 | 社区帖子、游戏截图 | BBS/API 分享链接 | 游戏简介、评分与价格 |
 | 知乎 | 正文内视频 | 问题、回答、专栏文章、想法 | `link.zhihu.com` | 页面数据回退解析 |
 
@@ -78,7 +79,7 @@ git clone https://github.com/Qfxaile/astrbot_multi_parser.git astrbot_plugin_mul
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `platform_switches` | 对象（布尔开关） | 七个平台全部启用 | 分别控制 B站、抖音、小红书、贴吧、微博、小黑盒和知乎解析器 |
+| `platform_switches` | 对象（布尔开关） | 八个平台全部启用 | 分别控制 B站、抖音、小红书、贴吧、微博、微信、小黑盒和知乎解析器 |
 | `forward_mode` | 选项 | `threshold` | 内容发送方式：始终合并、超过阈值时合并或始终不合并（不推荐） |
 | `forward_image_threshold` | 整数 | `2` | 阈值模式下，图片数量严格超过该值时合并发送 |
 | `forward_text_threshold` | 整数 | `260` | 阈值模式下，最终可见文字字符数严格超过该值时合并发送 |
@@ -94,6 +95,7 @@ git clone https://github.com/Qfxaile/astrbot_multi_parser.git astrbot_plugin_mul
 | `redbook_cookies` | 文本 | 空 | 可选；可提高部分内容或无水印资源的可用性 |
 | `tieba_cookies` | 文本 | 空 | 可选；用于贴吧页面请求，可降低安全验证导致的解析失败 |
 | `weibo_cookies` | 文本 | 空 | 可选；用于需要登录态的微博页面请求 |
+| `wechat_yuanbao_cookies` | 文本 | 空 | 解析视频号短链时必填；登录腾讯元宝 Web 端后复制，仅发送到 `yuanbao.tencent.com` |
 | `xiaoheihe_cookies` | 文本 | 空 | 可选；未配置时自动申请匿名设备令牌 |
 | `zhihu_cookies` | 文本 | 空 | 可选；用于知乎页面和接口请求 |
 
@@ -101,6 +103,8 @@ git clone https://github.com/Qfxaile/astrbot_multi_parser.git astrbot_plugin_mul
 > Cookie 属于敏感凭据。请仅通过 AstrBot 配置页面提供，不要写入代码、README、Issue、测试样例或日志。提交问题前请先删除 URL 查询参数中的令牌及日志中的个人信息。
 
 当平台明确返回未登录、鉴权拒绝或安全验证结果，并最终无法通过公开页面回退获取内容时，插件会提示配置 Cookies；如果已经配置，则提示 Cookies 可能已失效。普通网络错误、内容删除和单张图片下载失败不会显示该提示。
+
+微信公众号文章不使用腾讯元宝 Cookie。视频号浏览器预览长链如果已经携带 `token` 和 `eid`，可直接请求腾讯视频号预览接口；App 分享的 `weixin.qq.com/sph/...` 短链不包含这两个参数，因此需要先通过用户自己的腾讯元宝登录态换取。插件不会把该 Cookie 发送到公众号、视频号或媒体 CDN。
 
 ## 消息发送策略
 
@@ -182,7 +186,7 @@ git clone https://github.com/Qfxaile/astrbot_multi_parser.git astrbot_plugin_mul
 
 ## 安全与隐私
 
-- 各平台 Cookie 仅随对应平台域请求发送，不会带到分享跳转目标或跨域图片 CDN。
+- 各平台 Cookie 仅随对应平台域请求发送，不会带到分享跳转目标或跨域图片 CDN；腾讯元宝 Cookie 只绑定到 `yuanbao.tencent.com`。
 - 小黑盒未配置 Cookie 时会向其设备指纹服务申请匿名设备 ID，不会上传聊天内容或用户凭据。
 - 图片地址必须使用 HTTP(S)、默认端口和受信任的平台域名；私有地址及不安全重定向会被拒绝。
 - 图片重定向最多跟随 5 次，并在每次跳转前重新校验目标地址。
@@ -200,6 +204,10 @@ astrbot_plugin_multi_parser/
 │   ├── douyin/                # 抖音视频、图文和汽水音乐解析
 │   │   ├── parser.py          # 抖音链接路由与作品解析
 │   │   └── music.py           # 汽水音乐字段提取与音频地址校验
+│   ├── wechat/                # 微信公众号文章和视频号解析
+│   │   ├── article.py         # 公众号 HTML 与有序图文提取
+│   │   ├── channels.py        # 视频号令牌交换与预览接口
+│   │   └── parser.py          # 微信链接识别与路由
 │   ├── xiaoheihe/             # 小黑盒路由、帖子、游戏、签名和指纹
 │   └── zhihu/                 # 知乎路由、请求、载荷处理和正文提取
 ├── tests/                     # pytest 单元测试
@@ -240,6 +248,7 @@ Set-Location astrbot_plugin_multi_parser
 - 内容合并转发目前仅对 `aiocqhttp` 和 `satori` 启用，其他适配器使用普通消息链。
 - 各消息平台对远程音频、视频、单条消息长度和媒体数量的限制不同；插件无法绕过平台自身限制。
 - 视频链接的有效期、防盗链策略和可访问区域由内容平台决定。
+- 视频号短链依赖腾讯元宝当前的 Web 登录态和解析接口；Cookie 失效或腾讯调整接口后需重新配置或更新解析器。
 
 ## 贡献与安全
 
@@ -252,9 +261,9 @@ Set-Location astrbot_plugin_multi_parser
 - [AstrBot](https://github.com/AstrBotDevs/AstrBot)：插件运行平台与开发 API。本项目遵循其插件目录、元数据、异步网络、日志和调试规范。
 - [AstrBot 消息发送指南](https://docs.astrbot.app/dev/star/guides/send-message.html)：统一消息链、富媒体组件与合并转发能力说明。
 - [AstrBot 消息平台指南](https://docs.astrbot.app/platform/start.html)：当前内置消息平台及接入文档。
-- [Zhalslar/astrbot_plugin_parser](https://github.com/Zhalslar/astrbot_plugin_parser)：微博、小黑盒和知乎解析实现的参考来源；小黑盒签名算法与匿名设备指纹请求参数在其 MIT 许可实现基础上改写。
+- [Zhalslar/astrbot_plugin_parser](https://github.com/Zhalslar/astrbot_plugin_parser)：微博、视频号、小黑盒和知乎解析实现的参考来源；小黑盒签名算法与匿名设备指纹请求参数在其 MIT 许可实现基础上改写。
 
-参考范围包括 `platforms/weibo.py`、`platforms/xiaoheihe/` 和 `platforms/zhihu/`。上游项目采用 [MIT License](https://github.com/Zhalslar/astrbot_plugin_parser/blob/master/LICENSE)。感谢上述项目及其贡献者。
+参考范围包括 `platforms/weibo.py`、`platforms/wechat/channels.py`、`platforms/xiaoheihe/` 和 `platforms/zhihu/`。视频号的“元宝换取令牌，再请求官方预览接口”流程参考其 `ShipinhaoParser` 重新实现。上游项目采用 [MIT License](https://github.com/Zhalslar/astrbot_plugin_parser/blob/master/LICENSE)。感谢上述项目及其贡献者。
 
 ## 免责声明
 

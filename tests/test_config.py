@@ -7,6 +7,7 @@ PLATFORMS = (
     "redbook",
     "tieba",
     "weibo",
+    "wechat",
     "xiaoheihe",
     "zhihu",
 )
@@ -16,6 +17,7 @@ COOKIE_KEYS = (
     "redbook_cookies",
     "tieba_cookies",
     "weibo_cookies",
+    "wechat_yuanbao_cookies",
     "xiaoheihe_cookies",
     "zhihu_cookies",
 )

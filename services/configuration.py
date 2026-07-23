@@ -8,6 +8,7 @@ from ..platforms import (
     DouyinParser,
     RedBookParser,
     TiebaParser,
+    WeChatParser,
     WeiboParser,
     XiaoheiheParser,
     ZhihuParser,
@@ -19,6 +20,7 @@ PARSER_TYPES: tuple[type[BaseParser], ...] = (
     RedBookParser,
     TiebaParser,
     WeiboParser,
+    WeChatParser,
     XiaoheiheParser,
     ZhihuParser,
 )

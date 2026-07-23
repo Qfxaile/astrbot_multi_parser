@@ -8,6 +8,7 @@ def test_registry_order_is_stable():
         "redbook",
         "tieba",
         "weibo",
+        "wechat",
         "xiaoheihe",
         "zhihu",
     ]
