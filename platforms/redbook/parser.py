@@ -4,9 +4,9 @@ from urllib.parse import quote, urlparse, urlsplit, urlunsplit
 
 import httpx
 
-from ..core.http import build_cookies
-from ..core.media import mark_invalid_legacy_images
-from ..models import BaseParser, ParseContext, ParseResult
+from ...core.http import build_cookies
+from ...core.media import mark_invalid_legacy_images
+from ...models import BaseParser, ParseContext, ParseResult
 
 
 class RedBookParser(BaseParser):
@@ -111,6 +111,9 @@ class RedBookParser(BaseParser):
                 parsed_content_url._replace(query="", fragment="")
             )
             mark_invalid_legacy_images(result, self.INVALID_IMAGE_URL)
+            # 页面解析结束后不再需要登录态；清空 Cookie，避免图片下载把
+            # ``web_session`` 带到图片域或后续重定向目标。
+            client.cookies.clear()
             return await self.materialize_images(result, client, image_referer)
 
     def _raise_for_auth_page(self, response: httpx.Response) -> None:

@@ -190,17 +190,17 @@ async def test_platform_login_delegates_chinese_platform_name_in_private_chat():
 
         async def login(self, event, platform_name):
             self.calls.append((event, platform_name))
-            return "抖音登录成功，Cookies 已保存。"
+            return "小红书登录成功，Cookies 已保存。"
 
     plugin = make_plugin(ParseResult(platform="fake"))
     authentication = FakeAuthentication()
     plugin._authentication = authentication
     event = FakeEvent()
 
-    messages = [item async for item in plugin.platform_login(event, "抖音")]
+    messages = [item async for item in plugin.platform_login(event, "小红书")]
 
-    assert messages[0][0].text == "抖音登录成功，Cookies 已保存。"
-    assert authentication.calls == [(event, "抖音")]
+    assert messages[0][0].text == "小红书登录成功，Cookies 已保存。"
+    assert authentication.calls == [(event, "小红书")]
 
 
 @pytest.mark.asyncio

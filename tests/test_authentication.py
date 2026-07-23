@@ -103,14 +103,16 @@ async def test_cancel_only_stops_login_from_same_private_session():
             return LoginPollResult(LoginPollState.WAITING)
 
     provider = WaitingProvider([])
+    provider.display_name = "小红书"
+    provider.cookie_config_key = "redbook_cookies"
     service = AuthenticationService(
         {},
-        provider_factories={"B站": lambda: provider},
+        provider_factories={"小红书": lambda: provider},
     )
     service.POLL_INTERVAL_SECONDS = 60
     owner = FakeEvent("adapter:private:owner")
     other = FakeEvent("adapter:private:other")
-    login_task = asyncio.create_task(service.login(owner, "B站"))
+    login_task = asyncio.create_task(service.login(owner, "小红书"))
     await started.wait()
 
     assert await service.cancel(other) == "当前私聊没有进行中的平台登录。"
@@ -164,6 +166,67 @@ async def test_douyin_same_platform_login_is_exclusive():
 
 
 @pytest.mark.asyncio
+async def test_redbook_same_platform_login_is_exclusive():
+    started = asyncio.Event()
+
+    class WaitingRedBookProvider(FakeLoginProvider):
+        display_name = "小红书"
+        cookie_config_key = "redbook_cookies"
+
+        async def poll_qr_status(self, session_key):
+            started.set()
+            return LoginPollResult(LoginPollState.WAITING)
+
+    first_provider = WaitingRedBookProvider([])
+    second_provider = WaitingRedBookProvider([])
+    providers = [first_provider, second_provider]
+    service = AuthenticationService(
+        {},
+        provider_factories={"小红书": lambda: providers.pop(0)},
+    )
+    service.POLL_INTERVAL_SECONDS = 60
+    owner = FakeEvent("adapter:private:owner")
+    login_task = asyncio.create_task(service.login(owner, "小红书"))
+    await started.wait()
+
+    duplicate_message = await service.login(FakeEvent(), "小红书")
+
+    assert duplicate_message == "小红书已有登录流程正在进行，请先取消或等待结束。"
+    assert second_provider.closed is True
+    assert await service.cancel(owner) == "已取消当前私聊中的平台登录。"
+    assert await login_task is None
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_redbook_login_during_plugin_unload():
+    started = asyncio.Event()
+
+    class WaitingRedBookProvider(FakeLoginProvider):
+        display_name = "小红书"
+        cookie_config_key = "redbook_cookies"
+
+        async def poll_qr_status(self, session_key):
+            started.set()
+            return LoginPollResult(LoginPollState.WAITING)
+
+    provider = WaitingRedBookProvider([])
+    service = AuthenticationService(
+        {},
+        provider_factories={"小红书": lambda: provider},
+    )
+    service.POLL_INTERVAL_SECONDS = 60
+    login_task = asyncio.create_task(
+        service.login(FakeEvent("adapter:private:owner"), "小红书")
+    )
+    await started.wait()
+
+    await service.close()
+
+    assert await login_task is None
+    assert provider.closed is True
+
+
+@pytest.mark.asyncio
 async def test_douyin_logout_restores_cookie_when_save_fails():
     config = FailingSavingConfig(douyin_cookies="sessionid=session-secret")
     service = AuthenticationService(
@@ -178,16 +241,57 @@ async def test_douyin_logout_restores_cookie_when_save_fails():
     assert config.save_calls == 1
 
 
-def test_default_authentication_service_supports_bilibili_and_douyin():
+@pytest.mark.asyncio
+async def test_redbook_logout_restores_cookie_when_save_fails():
+    config = FailingSavingConfig(redbook_cookies="web_session=session-secret")
     service = AuthenticationService(
-        {"bilibili_cookies": "", "douyin_cookies": ""}
+        config,
+        provider_factories={"小红书": lambda: None},
     )
 
-    assert service.supported_platforms == ("B站", "抖音")
+    message = await service.logout("小红书")
+
+    assert message == "Cookies 保存失败，原配置未被修改。"
+    assert config["redbook_cookies"] == "web_session=session-secret"
+    assert config.save_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_redbook_login_restores_cookie_when_save_fails():
+    config = FailingSavingConfig(redbook_cookies="web_session=previous-session")
+    provider = FakeLoginProvider(
+        [LoginPollResult(LoginPollState.SUCCESS, "web_session=new-session")]
+    )
+    provider.display_name = "小红书"
+    provider.cookie_config_key = "redbook_cookies"
+    service = AuthenticationService(
+        config,
+        provider_factories={"小红书": lambda: provider},
+    )
+
+    message = await service.login(FakeEvent(), "小红书")
+
+    assert message == "Cookies 保存失败，原配置未被修改。"
+    assert config["redbook_cookies"] == "web_session=previous-session"
+    assert config.save_calls == 1
+    assert provider.closed is True
+
+
+def test_default_authentication_service_supports_all_qr_platforms():
+    service = AuthenticationService(
+        {
+            "bilibili_cookies": "",
+            "douyin_cookies": "",
+            "redbook_cookies": "",
+        }
+    )
+
+    assert service.supported_platforms == ("B站", "抖音", "小红书")
     assert service.status() == (
-        "平台登录状态：\n- B站：未配置\n- 抖音：未配置"
+        "平台登录状态：\n- B站：未配置\n- 抖音：未配置\n- 小红书：未配置"
     )
     assert "暂不支持“douyin”" in service._unsupported_platform_message("douyin")
+    assert "暂不支持“redbook”" in service._unsupported_platform_message("redbook")
 
 
 def test_status_and_platform_names_only_accept_chinese():
