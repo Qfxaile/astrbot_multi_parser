@@ -10,8 +10,8 @@ from uuid import uuid4
 
 import httpx
 
-from ..core.http import build_cookies
-from ..models import BaseParser, OrderedContent, ParseContext, ParseResult
+from ...core.http import build_cookies
+from ...models import BaseParser, OrderedContent, ParseContext, ParseResult
 
 
 class _WeiboArticleParser(HTMLParser):

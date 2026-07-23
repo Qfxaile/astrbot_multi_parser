@@ -55,6 +55,11 @@ class FakeLoginProvider(PlatformLoginProvider):
         self.closed = True
 
 
+class FakeWeiboLoginProvider(FakeLoginProvider):
+    display_name = "微博"
+    cookie_config_key = "weibo_cookies"
+
+
 @pytest.mark.asyncio
 async def test_login_sends_qr_and_saves_cookie_without_echoing_secret():
     config = SavingConfig()
@@ -300,16 +305,18 @@ def test_default_authentication_service_supports_all_login_providers():
             "bilibili_cookies": "",
             "douyin_cookies": "",
             "tieba_cookies": "",
+            "weibo_cookies": "",
             "zhihu_cookies": "",
         }
     )
 
-    assert service.supported_platforms == ("B站", "抖音", "贴吧", "知乎")
+    assert service.supported_platforms == ("B站", "抖音", "贴吧", "微博", "知乎")
     assert service.status() == (
         "平台登录状态：\n- B站：未配置\n- 抖音：未配置\n"
-        "- 贴吧：未配置\n- 知乎：未配置"
+        "- 贴吧：未配置\n- 微博：未配置\n- 知乎：未配置"
     )
     assert "暂不支持“tieba”" in service._unsupported_platform_message("tieba")
+    assert "暂不支持“weibo”" in service._unsupported_platform_message("weibo")
 
 
 @pytest.mark.asyncio
@@ -428,6 +435,75 @@ async def test_zhihu_close_releases_active_login_on_plugin_unload():
     assert provider.closed is True
 
 
+@pytest.mark.asyncio
+async def test_weibo_same_platform_login_is_exclusive_and_logout_rolls_back():
+    started = asyncio.Event()
+
+    class WaitingWeiboProvider(FakeWeiboLoginProvider):
+        async def poll_qr_status(self, session_key):
+            started.set()
+            return LoginPollResult(LoginPollState.WAITING)
+
+    first_provider = WaitingWeiboProvider([])
+    second_provider = WaitingWeiboProvider([])
+    providers = [first_provider, second_provider]
+    service = AuthenticationService(
+        {},
+        provider_factories={"微博": lambda: providers.pop(0)},
+    )
+    service.POLL_INTERVAL_SECONDS = 60
+    owner = FakeEvent("adapter:private:owner")
+    login_task = asyncio.create_task(service.login(owner, "微博"))
+    await started.wait()
+
+    assert await service.login(FakeEvent(), "微博") == (
+        "微博已有登录流程正在进行，请先取消或等待结束。"
+    )
+    assert second_provider.closed is True
+    assert await service.cancel(owner) == "已取消当前私聊中的平台登录。"
+    assert await login_task is None
+
+    config = FailingSavingConfig(weibo_cookies="SUB=session-secret")
+    logout_service = AuthenticationService(
+        config,
+        provider_factories={"微博": lambda: None},
+    )
+    assert await logout_service.logout("微博") == "Cookies 保存失败，原配置未被修改。"
+    assert config["weibo_cookies"] == "SUB=session-secret"
+
+
+@pytest.mark.asyncio
+async def test_weibo_login_restores_cookie_when_save_fails():
+    config = FailingSavingConfig(weibo_cookies="SUB=original-secret")
+    provider = FakeWeiboLoginProvider(
+        [LoginPollResult(LoginPollState.SUCCESS, "SUB=new-secret")]
+    )
+    service = AuthenticationService(
+        config,
+        provider_factories={"微博": lambda: provider},
+    )
+    service.POLL_INTERVAL_SECONDS = 0
+
+    message = await service.login(FakeEvent(), "微博")
+
+    assert message == "Cookies 保存失败，原配置未被修改。"
+    assert config["weibo_cookies"] == "SUB=original-secret"
+    assert provider.closed is True
+
+
+@pytest.mark.asyncio
+async def test_weibo_logout_clears_cookie_and_saves_config():
+    config = SavingConfig(weibo_cookies="SUB=session-secret")
+    service = AuthenticationService(
+        config,
+        provider_factories={"微博": lambda: None},
+    )
+
+    assert await service.logout("微博") == "微博已退出登录，Cookies 已清除。"
+    assert config["weibo_cookies"] == ""
+    assert config.save_calls == 1
+
+
 def test_status_and_platform_names_only_accept_chinese():
     service = AuthenticationService(
         {"bilibili_cookies": ""},
@@ -435,6 +511,4 @@ def test_status_and_platform_names_only_accept_chinese():
     )
 
     assert service.status() == "平台登录状态：\n- B站：未配置"
-    assert "暂不支持“bilibili”" in service._unsupported_platform_message(
-        "bilibili"
-    )
+    assert "暂不支持“bilibili”" in service._unsupported_platform_message("bilibili")
