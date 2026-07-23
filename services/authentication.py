@@ -15,6 +15,7 @@ from ..core.authentication import (
 )
 from ..core.http import parse_cookie_header
 from ..platforms.bilibili import BilibiliLoginProvider
+from ..platforms.douyin import DouyinLoginProvider
 
 ProviderFactory = Callable[[], PlatformLoginProvider]
 
@@ -42,10 +43,14 @@ class AuthenticationService:
         self.config = config
         self._provider_factories = dict(
             provider_factories
-            or {"B站": lambda: BilibiliLoginProvider(self.config)}
+            or {
+                "B站": lambda: BilibiliLoginProvider(self.config),
+                "抖音": lambda: DouyinLoginProvider(self.config),
+            }
         )
         self._cookie_keys = {
             "B站": "bilibili_cookies",
+            "抖音": "douyin_cookies",
         }
         self._active_logins: dict[str, _ActiveLogin] = {}
         self._lock = asyncio.Lock()
@@ -169,7 +174,10 @@ class AuthenticationService:
                 attempt.cancel_event.set()
             if not parse_cookie_header(self.config.get(cookie_key, "")):
                 return f"{platform_name}当前没有已保存的 Cookies。"
-            self._save_cookie(cookie_key, "")
+            try:
+                self._save_cookie(cookie_key, "")
+            except PlatformLoginError as exc:
+                return str(exc)
         return f"{platform_name}已退出登录，Cookies 已清除。"
 
     def status(self) -> str:

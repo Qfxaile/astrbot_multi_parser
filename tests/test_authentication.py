@@ -21,6 +21,12 @@ class SavingConfig(dict):
         self.save_calls += 1
 
 
+class FailingSavingConfig(SavingConfig):
+    def save_config(self):
+        super().save_config()
+        raise RuntimeError("disk failure")
+
+
 class FakeEvent:
     def __init__(self, session_id="adapter:private:admin"):
         self.unified_msg_origin = session_id
@@ -123,6 +129,65 @@ async def test_logout_clears_cookie_and_saves_config():
     assert message == "B站已退出登录，Cookies 已清除。"
     assert config["bilibili_cookies"] == ""
     assert config.save_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_douyin_same_platform_login_is_exclusive():
+    started = asyncio.Event()
+
+    class WaitingDouyinProvider(FakeLoginProvider):
+        display_name = "抖音"
+        cookie_config_key = "douyin_cookies"
+
+        async def poll_qr_status(self, session_key):
+            started.set()
+            return LoginPollResult(LoginPollState.WAITING)
+
+    first_provider = WaitingDouyinProvider([])
+    second_provider = WaitingDouyinProvider([])
+    providers = [first_provider, second_provider]
+    service = AuthenticationService(
+        {},
+        provider_factories={"抖音": lambda: providers.pop(0)},
+    )
+    service.POLL_INTERVAL_SECONDS = 60
+    owner = FakeEvent("adapter:private:owner")
+    login_task = asyncio.create_task(service.login(owner, "抖音"))
+    await started.wait()
+
+    duplicate_message = await service.login(FakeEvent(), "抖音")
+
+    assert duplicate_message == "抖音已有登录流程正在进行，请先取消或等待结束。"
+    assert second_provider.closed is True
+    assert await service.cancel(owner) == "已取消当前私聊中的平台登录。"
+    assert await login_task is None
+
+
+@pytest.mark.asyncio
+async def test_douyin_logout_restores_cookie_when_save_fails():
+    config = FailingSavingConfig(douyin_cookies="sessionid=session-secret")
+    service = AuthenticationService(
+        config,
+        provider_factories={"抖音": lambda: None},
+    )
+
+    message = await service.logout("抖音")
+
+    assert message == "Cookies 保存失败，原配置未被修改。"
+    assert config["douyin_cookies"] == "sessionid=session-secret"
+    assert config.save_calls == 1
+
+
+def test_default_authentication_service_supports_bilibili_and_douyin():
+    service = AuthenticationService(
+        {"bilibili_cookies": "", "douyin_cookies": ""}
+    )
+
+    assert service.supported_platforms == ("B站", "抖音")
+    assert service.status() == (
+        "平台登录状态：\n- B站：未配置\n- 抖音：未配置"
+    )
+    assert "暂不支持“douyin”" in service._unsupported_platform_message("douyin")
 
 
 def test_status_and_platform_names_only_accept_chinese():
