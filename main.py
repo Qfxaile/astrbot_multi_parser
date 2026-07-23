@@ -5,6 +5,7 @@ from astrbot.api.star import Context, Star
 
 from .core.contracts import ParseResult
 from .core.http import CookieAccessError
+from .services.authentication import AuthenticationService
 from .services.configuration import (
     build_parsers,
     enabled_parsers,
@@ -28,6 +29,7 @@ class MultiParserPlugin(Star):
         super().__init__(context)
         self.config = config
         self.parsers = build_parsers(config)
+        self._authentication = AuthenticationService(config)
         self._delivery = DeliveryService(config)
         self._migrate_platform_switches()
 
@@ -37,6 +39,13 @@ class MultiParserPlugin(Star):
             delivery = DeliveryService(self.config)
             self._delivery = delivery
         return delivery
+
+    def _authentication_service(self) -> AuthenticationService:
+        authentication = getattr(self, "_authentication", None)
+        if authentication is None:
+            authentication = AuthenticationService(self.config)
+            self._authentication = authentication
+        return authentication
 
     def _migrate_platform_switches(self) -> None:
         migrate_platform_switches(self.config, self.parsers)
@@ -76,6 +85,54 @@ class MultiParserPlugin(Star):
         self, event: AstrMessageEvent, result: ParseResult, reason: str
     ) -> None:
         await self._delivery_service().send_forward_links(event, result, reason)
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("平台登录")
+    async def platform_login(
+        self,
+        event: AstrMessageEvent,
+        platform_name: str = "",
+    ):
+        """在管理员私聊中登录指定中文名平台。"""
+        if not event.is_private_chat():
+            yield event.plain_result("平台登录仅允许管理员在私聊中操作。")
+            return
+        message = await self._authentication_service().login(event, platform_name)
+        if message:
+            yield event.plain_result(message)
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("平台登录状态")
+    async def platform_login_status(self, event: AstrMessageEvent):
+        """在管理员私聊中查看平台登录配置状态。"""
+        if not event.is_private_chat():
+            yield event.plain_result("平台登录状态仅允许管理员在私聊中查看。")
+            return
+        yield event.plain_result(self._authentication_service().status())
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("平台退出")
+    async def platform_logout(
+        self,
+        event: AstrMessageEvent,
+        platform_name: str = "",
+    ):
+        """在管理员私聊中清除指定平台登录态。"""
+        if not event.is_private_chat():
+            yield event.plain_result("平台退出仅允许管理员在私聊中操作。")
+            return
+        message = await self._authentication_service().logout(platform_name)
+        yield event.plain_result(message)
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("取消平台登录")
+    async def cancel_platform_login(self, event: AstrMessageEvent):
+        """取消当前管理员私聊发起的平台登录。"""
+        if not event.is_private_chat():
+            yield event.plain_result("取消平台登录仅允许管理员在私聊中操作。")
+            return
+        message = await self._authentication_service().cancel(event)
+        yield event.plain_result(message)
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def handle_parse(self, event: AstrMessageEvent):
@@ -160,3 +217,9 @@ class MultiParserPlugin(Star):
             yield event.plain_result(
                 f"{reason}\n视频链接发送失败: {exc}\n视频链接: {result.video_url}"
             )
+
+    async def terminate(self):
+        """插件卸载时取消仍在进行的平台登录。"""
+        authentication = getattr(self, "_authentication", None)
+        if authentication is not None:
+            await authentication.close()

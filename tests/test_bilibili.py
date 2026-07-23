@@ -2,7 +2,7 @@ import httpx
 import pytest
 from astrbot_multi_parser.core.http import CookieAccessError
 from astrbot_multi_parser.models import ParseContext, ParseResult
-from astrbot_multi_parser.platforms import bilibili
+from astrbot_multi_parser.platforms.bilibili import parser as bilibili
 
 
 @pytest.mark.parametrize(

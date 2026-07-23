@@ -77,6 +77,8 @@ class FakeEvent:
             ),
             message_id="",
         )
+        self.unified_msg_origin = "test:private:admin"
+        self.private = True
 
     def get_sender_id(self):
         return self.sender_id
@@ -88,6 +90,9 @@ class FakeEvent:
         if self.platform_name == "__raise__":
             raise RuntimeError("platform unavailable")
         return self.platform_name
+
+    def is_private_chat(self):
+        return self.private
 
     def chain_result(self, chain):
         return chain
@@ -218,6 +223,41 @@ async def collect_results(monkeypatch, result, event=None, **config):
 async def collect_plugin_results(plugin, event):
     yielded = [item async for item in plugin.handle_parse(event)]
     return [*event.sent, *yielded]
+
+
+@pytest.mark.asyncio
+async def test_platform_login_rejects_group_chat_before_starting_login():
+    plugin = make_plugin(ParseResult(platform="fake"))
+    authentication = SimpleNamespace(login=None)
+    plugin._authentication = authentication
+    event = FakeEvent()
+    event.private = False
+
+    messages = [item async for item in plugin.platform_login(event, "B站")]
+
+    assert messages[0][0].text == "平台登录仅允许管理员在私聊中操作。"
+    assert authentication.login is None
+
+
+@pytest.mark.asyncio
+async def test_platform_login_delegates_chinese_platform_name_in_private_chat():
+    class FakeAuthentication:
+        def __init__(self):
+            self.calls = []
+
+        async def login(self, event, platform_name):
+            self.calls.append((event, platform_name))
+            return "B站登录成功，Cookies 已保存。"
+
+    plugin = make_plugin(ParseResult(platform="fake"))
+    authentication = FakeAuthentication()
+    plugin._authentication = authentication
+    event = FakeEvent()
+
+    messages = [item async for item in plugin.platform_login(event, "B站")]
+
+    assert messages[0][0].text == "B站登录成功，Cookies 已保存。"
+    assert authentication.calls == [(event, "B站")]
 
 
 @pytest.mark.asyncio
