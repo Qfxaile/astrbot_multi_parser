@@ -18,6 +18,7 @@ from ..platforms.bilibili import BilibiliLoginProvider
 from ..platforms.douyin import DouyinLoginProvider
 from ..platforms.tieba import TiebaLoginProvider
 from ..platforms.weibo import WeiboLoginProvider
+from ..platforms.xiaoheihe import XiaoheiheLoginProvider
 from ..platforms.zhihu import ZhihuLoginProvider
 
 ProviderFactory = Callable[[], PlatformLoginProvider]
@@ -51,6 +52,7 @@ class AuthenticationService:
                 "抖音": lambda: DouyinLoginProvider(self.config),
                 "贴吧": lambda: TiebaLoginProvider(self.config),
                 "微博": lambda: WeiboLoginProvider(self.config),
+                "小黑盒": lambda: XiaoheiheLoginProvider(self.config),
                 "知乎": lambda: ZhihuLoginProvider(self.config),
             }
         )
@@ -59,6 +61,7 @@ class AuthenticationService:
             "抖音": "douyin_cookies",
             "贴吧": "tieba_cookies",
             "微博": "weibo_cookies",
+            "小黑盒": "xiaoheihe_cookies",
             "知乎": "zhihu_cookies",
         }
         self._active_logins: dict[str, _ActiveLogin] = {}
@@ -102,7 +105,8 @@ class AuthenticationService:
                 MessageChain(
                     [
                         Plain(
-                            f"请使用{platform_name}客户端扫描二维码并确认登录。"
+                            f"请使用{provider.qr_scanner_name or platform_name}"
+                            "客户端扫描二维码并确认登录。"
                             "二维码仅用于本次登录，请勿转发。"
                         ),
                         Image.fromBytes(challenge.image_bytes),

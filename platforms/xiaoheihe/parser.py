@@ -3,6 +3,7 @@ import re
 import httpx
 
 from ...core.contracts import ParseContext, ParseResult
+from ...core.http import parse_cookie_header
 from ...core.parser import BaseParser
 from .fingerprint import V4_DATA, V4_EP
 from .game import (
@@ -33,6 +34,7 @@ class XiaoheiheParser(BaseParser):
     display_name = "小黑盒"
     cookie_config_key = "xiaoheihe_cookies"
     image_host_suffixes = ("max-c.com", "xiaoheihe.cn")
+    AUTH_COOKIE_NAMES = ("pkey", "x_xhh_tokenid", "heybox_id")
     CHAR_TABLE = RequestSigner.CHAR_TABLE
     BBS_WEB_PATTERN = (
         r"https?://(?:www\.)?xiaoheihe\.cn/app/bbs/link/"
@@ -99,20 +101,39 @@ class XiaoheiheParser(BaseParser):
         return self.request_timeout
 
     def _extract_xhh_tokenid_from_cookies(self) -> str | None:
-        cookie_header = str(self.config.get("xiaoheihe_cookies", ""))
-        matched = re.search(r"(?:^|;\s*)x_xhh_tokenid=([^;]+)", cookie_header)
-        return matched.group(1) if matched else None
+        return self._configured_cookie_values().get("x_xhh_tokenid")
+
+    def _configured_cookie_values(self) -> dict[str, str]:
+        """提取小黑盒请求实际使用的白名单配置字段。"""
+        allowed = set(self.AUTH_COOKIE_NAMES)
+        return {
+            name: value
+            for name, value in parse_cookie_header(
+                self.config.get("xiaoheihe_cookies", "")
+            )
+            if name in allowed and value
+        }
 
     async def _build_request_context(self) -> dict[str, str]:
-        token = self._extract_xhh_tokenid_from_cookies()
+        configured = self._configured_cookie_values()
+        token = configured.get("x_xhh_tokenid")
         if not token:
             device_id = await self._fetch_device_id()
             if not device_id:
                 raise ValueError("小黑盒 deviceprofile 未返回 deviceId")
-            return {"x_xhh_tokenid": f"B{device_id}", "device_id": device_id}
-        return {
+            token = f"B{device_id}"
+        else:
+            device_id = token[1:] if token.startswith("B") else ""
+        cookie_values = {
+            "pkey": configured.get("pkey", ""),
             "x_xhh_tokenid": token,
-            "device_id": token[1:] if token.startswith("B") else "",
+        }
+        return {
+            "cookie_header": "; ".join(
+                f"{name}={value}" for name, value in cookie_values.items() if value
+            ),
+            "device_id": device_id,
+            "heybox_id": configured.get("heybox_id", ""),
         }
 
     async def _fetch_device_id(self) -> str:
@@ -151,7 +172,7 @@ class XiaoheiheParser(BaseParser):
             "web_version": "2.5",
             "x_client_type": "web",
             "x_app": "heybox_website",
-            "heybox_id": "",
+            "heybox_id": request_context["heybox_id"],
             "x_os_type": "Windows",
             "device_info": "Chrome",
             "device_id": request_context["device_id"],
@@ -168,7 +189,7 @@ class XiaoheiheParser(BaseParser):
             response = await client.get(
                 "https://api.xiaoheihe.cn/bbs/app/link/tree",
                 params=params,
-                headers={"Cookie": f"x_xhh_tokenid={request_context['x_xhh_tokenid']}"},
+                headers={"Cookie": request_context["cookie_header"]},
             )
             self.raise_for_response_status(response)
             payload = response.json()
@@ -207,7 +228,7 @@ class XiaoheiheParser(BaseParser):
                     "steam_appid": appid,
                     **self._sign_path("/game/get_game_detail/"),
                 },
-                headers={"Cookie": f"x_xhh_tokenid={request_context['x_xhh_tokenid']}"},
+                headers={"Cookie": request_context["cookie_header"]},
             )
             self.raise_for_response_status(detail_response)
             detail_payload = detail_response.json()
@@ -225,6 +246,7 @@ class XiaoheiheParser(BaseParser):
                 intro_response = await client.get(
                     "https://api.xiaoheihe.cn/game/game_introduction/",
                     params={"steam_appid": steam_appid, "return_json": 1},
+                    headers={"Cookie": request_context["cookie_header"]},
                 )
                 intro_response.raise_for_status()
                 intro_payload = intro_response.json()

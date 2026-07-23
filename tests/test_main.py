@@ -169,14 +169,15 @@ async def collect_plugin_results(plugin, event):
 
 
 @pytest.mark.asyncio
-async def test_platform_login_rejects_group_chat_before_starting_login():
+@pytest.mark.parametrize("platform_name", ["知乎", "小黑盒"])
+async def test_platform_login_rejects_group_chat_before_starting_login(platform_name):
     plugin = make_plugin(ParseResult(platform="fake"))
     authentication = SimpleNamespace(login=None)
     plugin._authentication = authentication
     event = FakeEvent()
     event.private = False
 
-    messages = [item async for item in plugin.platform_login(event, "知乎")]
+    messages = [item async for item in plugin.platform_login(event, platform_name)]
 
     assert messages[0][0].text == "平台登录仅允许管理员在私聊中操作。"
     assert authentication.login is None
@@ -243,6 +244,27 @@ async def test_platform_login_delegates_weibo_chinese_platform_name():
 
     assert messages[0][0].text == "微博登录成功，Cookies 已保存。"
     assert authentication.calls == [(event, "微博")]
+
+
+@pytest.mark.asyncio
+async def test_platform_login_delegates_xiaoheihe_chinese_platform_name():
+    class FakeAuthentication:
+        def __init__(self):
+            self.calls = []
+
+        async def login(self, event, platform_name):
+            self.calls.append((event, platform_name))
+            return "小黑盒登录成功，Cookies 已保存。"
+
+    plugin = make_plugin(ParseResult(platform="fake"))
+    authentication = FakeAuthentication()
+    plugin._authentication = authentication
+    event = FakeEvent()
+
+    messages = [item async for item in plugin.platform_login(event, "小黑盒")]
+
+    assert messages[0][0].text == "小黑盒登录成功，Cookies 已保存。"
+    assert authentication.calls == [(event, "小黑盒")]
 
 
 @pytest.mark.asyncio
