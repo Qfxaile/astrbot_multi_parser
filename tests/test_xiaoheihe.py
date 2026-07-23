@@ -41,6 +41,23 @@ def test_extracts_token_from_cookie_header():
     assert parser._extract_xhh_tokenid_from_cookies() == "Bdevice123"
 
 
+def test_extracts_only_xiaoheihe_auth_cookie_whitelist():
+    parser = XiaoheiheParser(
+        {
+            "xiaoheihe_cookies": (
+                "pkey=session-secret; x_xhh_tokenid=Bdevice123; "
+                "heybox_id=123456; foreign=must-not-send"
+            )
+        }
+    )
+
+    assert parser._configured_cookie_values() == {
+        "pkey": "session-secret",
+        "x_xhh_tokenid": "Bdevice123",
+        "heybox_id": "123456",
+    }
+
+
 @pytest.mark.asyncio
 async def test_build_request_context_fetches_device_when_cookie_missing(monkeypatch):
     parser = XiaoheiheParser({})
@@ -51,8 +68,9 @@ async def test_build_request_context_fetches_device_when_cookie_missing(monkeypa
     monkeypatch.setattr(parser, "_fetch_device_id", fetch_device_id, raising=False)
 
     assert await parser._build_request_context() == {
-        "x_xhh_tokenid": "Banonymous-device",
+        "cookie_header": "x_xhh_tokenid=Banonymous-device",
         "device_id": "anonymous-device",
+        "heybox_id": "",
     }
 
 
@@ -174,7 +192,10 @@ async def test_parse_post_requests_signed_tree_and_materializes_images(
             assert request.url.path == "/bbs/app/link/tree"
             assert request.url.params["link_id"] == "abc123"
             assert request.url.params["hkey"]
-            assert request.headers.get("cookie") == "x_xhh_tokenid=Bdevice123"
+            assert request.url.params["heybox_id"] == "123456"
+            assert request.headers.get("cookie") == (
+                "pkey=session-secret; x_xhh_tokenid=Bdevice123"
+            )
             return httpx.Response(
                 200,
                 json={
@@ -197,10 +218,18 @@ async def test_parse_post_requests_signed_tree_and_materializes_images(
                 request=request,
             )
         assert request.url.host == "imgheybox.max-c.com"
+        assert "Cookie" not in request.headers
         return httpx.Response(200, content=image_bytes, request=request)
 
     install_mock_client(monkeypatch, handler)
-    parser = XiaoheiheParser({"xiaoheihe_cookies": "x_xhh_tokenid=Bdevice123"})
+    parser = XiaoheiheParser(
+        {
+            "xiaoheihe_cookies": (
+                "pkey=session-secret; x_xhh_tokenid=Bdevice123; "
+                "heybox_id=123456; foreign=must-not-send"
+            )
+        }
+    )
 
     result = await parser.parse(
         ParseContext(text="https://www.xiaoheihe.cn/app/bbs/link/abc123")
@@ -368,6 +397,7 @@ async def test_parse_game_page_merges_intro_and_materializes_images(
                     request=request,
                 )
         assert request.url.host == "gameimg.max-c.com"
+        assert "Cookie" not in request.headers
         return httpx.Response(200, content=image_bytes, request=request)
 
     install_mock_client(monkeypatch, handler)

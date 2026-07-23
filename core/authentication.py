@@ -39,6 +39,7 @@ class PlatformLoginProvider(ABC):
     """声明单个平台通过私聊完成登录所需的最小能力。"""
 
     display_name = ""
+    qr_scanner_name = ""
     cookie_config_key = ""
     sms_fallback_available = False
 
