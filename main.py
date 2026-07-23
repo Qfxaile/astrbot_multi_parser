@@ -6,11 +6,7 @@ from astrbot.api.star import Context, Star
 from .core.contracts import ParseResult
 from .core.http import CookieAccessError
 from .services.authentication import AuthenticationService
-from .services.configuration import (
-    build_parsers,
-    enabled_parsers,
-    migrate_platform_switches,
-)
+from .services.configuration import build_parsers, enabled_parsers
 from .services.delivery import DeliveryService
 from .services.video import (
     VideoSendPolicy,
@@ -31,7 +27,6 @@ class MultiParserPlugin(Star):
         self.parsers = build_parsers(config)
         self._authentication = AuthenticationService(config)
         self._delivery = DeliveryService(config)
-        self._migrate_platform_switches()
 
     def _delivery_service(self) -> DeliveryService:
         delivery = getattr(self, "_delivery", None)
@@ -46,9 +41,6 @@ class MultiParserPlugin(Star):
             authentication = AuthenticationService(self.config)
             self._authentication = authentication
         return authentication
-
-    def _migrate_platform_switches(self) -> None:
-        migrate_platform_switches(self.config, self.parsers)
 
     def _enabled_parsers(self):
         return enabled_parsers(self.config, self.parsers)

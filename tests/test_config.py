@@ -23,7 +23,7 @@ COOKIE_KEYS = (
 )
 
 
-def test_schema_uses_platform_switches_and_keeps_legacy_list_hidden():
+def test_schema_uses_platform_switches_without_legacy_settings():
     schema_path = Path(__file__).parents[1] / "_conf_schema.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
 
@@ -36,15 +36,8 @@ def test_schema_uses_platform_switches_and_keeps_legacy_list_hidden():
         assert platform_switches["items"][platform]["type"] == "bool"
         assert platform_switches["items"][platform]["default"] is True
 
-    assert schema["enabled_platforms"]["type"] == "list"
-    assert schema["enabled_platforms"]["default"] == list(PLATFORMS)
-    assert schema["enabled_platforms"]["invisible"] is True
-    assert schema["platform_switches_migrated"] == {
-        "description": "平台开关迁移状态",
-        "type": "bool",
-        "default": False,
-        "invisible": True,
-    }
+    assert "enabled_platforms" not in schema
+    assert "platform_switches_migrated" not in schema
 
     for cookie_key in COOKIE_KEYS:
         cookie_config = schema[cookie_key]

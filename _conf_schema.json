@@ -46,18 +46,6 @@
       }
     }
   },
-  "enabled_platforms": {
-    "description": "旧版启用平台",
-    "type": "list",
-    "default": ["bilibili", "douyin", "redbook", "tieba", "weibo", "wechat", "xiaoheihe", "zhihu"],
-    "invisible": true
-  },
-  "platform_switches_migrated": {
-    "description": "平台开关迁移状态",
-    "type": "bool",
-    "default": false,
-    "invisible": true
-  },
   "forward_mode": {
     "description": "内容发送方式",
     "type": "string",

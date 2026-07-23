@@ -1,7 +1,7 @@
 """插件应用服务。"""
 
 from .authentication import AuthenticationService
-from .configuration import build_parsers, enabled_parsers, migrate_platform_switches
+from .configuration import build_parsers, enabled_parsers
 from .delivery import DeliveryService
 from .video import VideoSendPolicy, VideoSizeInfo, VideoSizeProbe
 
@@ -13,5 +13,4 @@ __all__ = [
     "VideoSizeProbe",
     "build_parsers",
     "enabled_parsers",
-    "migrate_platform_switches",
 ]

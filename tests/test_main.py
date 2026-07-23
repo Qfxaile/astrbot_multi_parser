@@ -33,15 +33,6 @@ class FailingParser:
         raise CookieAccessError("测试平台", configured=False)
 
 
-class SavingConfig(dict):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.save_calls = 0
-
-    def save_config(self):
-        self.save_calls += 1
-
-
 class FakeBot:
     def __init__(self, failure=None):
         self.failure = failure
@@ -116,7 +107,7 @@ class FakeEvent:
 def make_plugin(result: ParseResult, **config):
     plugin = MultiParserPlugin.__new__(MultiParserPlugin)
     plugin.config = {
-        "enabled_platforms": ["fake"],
+        "platform_switches": {"fake": True},
         "enable_parse_reaction": False,
         "send_video_by_url": True,
         **config,
@@ -126,7 +117,7 @@ def make_plugin(result: ParseResult, **config):
 
 
 def test_plugin_registers_all_supported_parsers():
-    plugin = MultiParserPlugin(None, {"enabled_platforms": []})
+    plugin = MultiParserPlugin(None, {})
 
     assert set(plugin.parsers) == {
         "bilibili",
@@ -140,55 +131,9 @@ def test_plugin_registers_all_supported_parsers():
     }
 
 
-def test_plugin_migrates_legacy_enabled_platforms_once():
-    config = SavingConfig(
-        enabled_platforms=["bilibili", "zhihu"],
-        platform_switches={
-            "bilibili": True,
-            "douyin": True,
-            "redbook": True,
-            "tieba": True,
-            "weibo": True,
-            "wechat": True,
-            "xiaoheihe": True,
-            "zhihu": True,
-        },
-        platform_switches_migrated=False,
-    )
-
-    plugin = MultiParserPlugin(None, config)
-
-    assert config["platform_switches"] == {
-        "bilibili": True,
-        "douyin": False,
-        "redbook": False,
-        "tieba": False,
-        "weibo": False,
-        "wechat": False,
-        "xiaoheihe": False,
-        "zhihu": True,
-    }
-    assert config["platform_switches_migrated"] is True
-    assert config.save_calls == 1
-    assert plugin._enabled_parsers() == [
-        plugin.parsers["bilibili"],
-        plugin.parsers["zhihu"],
-    ]
-
-
-def test_plugin_respects_platform_switches_after_migration():
-    config = SavingConfig(
-        enabled_platforms=[
-            "bilibili",
-            "douyin",
-            "redbook",
-            "tieba",
-            "weibo",
-            "wechat",
-            "xiaoheihe",
-            "zhihu",
-        ],
-        platform_switches={
+def test_plugin_respects_platform_switches():
+    config = {
+        "platform_switches": {
             "bilibili": False,
             "douyin": True,
             "redbook": False,
@@ -197,13 +142,11 @@ def test_plugin_respects_platform_switches_after_migration():
             "wechat": False,
             "xiaoheihe": True,
             "zhihu": False,
-        },
-        platform_switches_migrated=True,
-    )
+        }
+    }
 
     plugin = MultiParserPlugin(None, config)
 
-    assert config.save_calls == 0
     assert plugin._enabled_parsers() == [
         plugin.parsers["douyin"],
         plugin.parsers["xiaoheihe"],
