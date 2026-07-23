@@ -16,9 +16,10 @@ from ..core.authentication import (
 from ..core.http import parse_cookie_header
 from ..platforms.bilibili import BilibiliLoginProvider
 from ..platforms.douyin import DouyinLoginProvider
+from ..platforms.redbook import RedBookLoginProvider
 from ..platforms.tieba import TiebaLoginProvider
-from ..platforms.weibo import WeiboLoginProvider
 from ..platforms.wechat import WeChatLoginProvider
+from ..platforms.weibo import WeiboLoginProvider
 from ..platforms.xiaoheihe import XiaoheiheLoginProvider
 from ..platforms.zhihu import ZhihuLoginProvider
 
@@ -51,6 +52,7 @@ class AuthenticationService:
             or {
                 "B站": lambda: BilibiliLoginProvider(self.config),
                 "抖音": lambda: DouyinLoginProvider(self.config),
+                "小红书": lambda: RedBookLoginProvider(self.config),
                 "贴吧": lambda: TiebaLoginProvider(self.config),
                 "微博": lambda: WeiboLoginProvider(self.config),
                 "微信": lambda: WeChatLoginProvider(self.config),
@@ -61,6 +63,7 @@ class AuthenticationService:
         self._cookie_keys = {
             "B站": "bilibili_cookies",
             "抖音": "douyin_cookies",
+            "小红书": "redbook_cookies",
             "贴吧": "tieba_cookies",
             "微博": "weibo_cookies",
             "微信": "wechat_yuanbao_cookies",

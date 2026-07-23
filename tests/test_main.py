@@ -208,7 +208,7 @@ async def test_platform_login_rejects_group_chat_before_starting_login(platform_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("platform_name", ["知乎", "微信"])
+@pytest.mark.parametrize("platform_name", ["小红书", "知乎", "微信"])
 async def test_platform_login_delegates_chinese_platform_name_in_private_chat(
     platform_name,
 ):

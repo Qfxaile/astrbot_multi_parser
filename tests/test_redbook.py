@@ -4,7 +4,7 @@ import httpx
 import pytest
 from astrbot_multi_parser.core.http import CookieAccessError
 from astrbot_multi_parser.models import ParseContext
-from astrbot_multi_parser.platforms import redbook
+from astrbot_multi_parser.platforms.redbook import parser as redbook
 
 
 def test_redbook_security_page_reports_missing_cookie():
