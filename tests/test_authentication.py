@@ -21,6 +21,12 @@ class SavingConfig(dict):
         self.save_calls += 1
 
 
+class FailingSavingConfig(SavingConfig):
+    def save_config(self):
+        super().save_config()
+        raise RuntimeError("disk failure")
+
+
 class FakeEvent:
     def __init__(self, session_id="adapter:private:admin"):
         self.unified_msg_origin = session_id
@@ -123,6 +129,115 @@ async def test_logout_clears_cookie_and_saves_config():
     assert message == "B站已退出登录，Cookies 已清除。"
     assert config["bilibili_cookies"] == ""
     assert config.save_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_tieba_same_platform_login_is_exclusive():
+    started = asyncio.Event()
+
+    class WaitingTiebaProvider(FakeLoginProvider):
+        display_name = "贴吧"
+        cookie_config_key = "tieba_cookies"
+
+        async def poll_qr_status(self, session_key):
+            started.set()
+            return LoginPollResult(LoginPollState.WAITING)
+
+    first_provider = WaitingTiebaProvider([])
+    second_provider = WaitingTiebaProvider([])
+    providers = [first_provider, second_provider]
+    service = AuthenticationService(
+        {},
+        provider_factories={"贴吧": lambda: providers.pop(0)},
+    )
+    service.POLL_INTERVAL_SECONDS = 60
+    owner = FakeEvent("adapter:private:owner")
+    login_task = asyncio.create_task(service.login(owner, "贴吧"))
+    await started.wait()
+
+    duplicate_message = await service.login(FakeEvent(), "贴吧")
+
+    assert duplicate_message == "贴吧已有登录流程正在进行，请先取消或等待结束。"
+    assert second_provider.closed is True
+    assert await service.cancel(owner) == "已取消当前私聊中的平台登录。"
+    assert await login_task is None
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_and_releases_active_tieba_login():
+    started = asyncio.Event()
+
+    class WaitingTiebaProvider(FakeLoginProvider):
+        display_name = "贴吧"
+        cookie_config_key = "tieba_cookies"
+
+        async def poll_qr_status(self, session_key):
+            started.set()
+            return LoginPollResult(LoginPollState.WAITING)
+
+    provider = WaitingTiebaProvider([])
+    service = AuthenticationService(
+        {},
+        provider_factories={"贴吧": lambda: provider},
+    )
+    service.POLL_INTERVAL_SECONDS = 60
+    login_task = asyncio.create_task(service.login(FakeEvent(), "贴吧"))
+    await started.wait()
+
+    await service.close()
+
+    assert await login_task is None
+    assert provider.closed is True
+    assert service.status() == "平台登录状态：\n- 贴吧：未配置"
+
+
+@pytest.mark.asyncio
+async def test_tieba_login_restores_cookie_when_save_fails():
+    config = FailingSavingConfig(tieba_cookies="BDUSS=previous-secret")
+
+    class SuccessfulTiebaProvider(FakeLoginProvider):
+        display_name = "贴吧"
+        cookie_config_key = "tieba_cookies"
+
+    provider = SuccessfulTiebaProvider(
+        [LoginPollResult(LoginPollState.SUCCESS, "BDUSS=new-secret")]
+    )
+    service = AuthenticationService(
+        config,
+        provider_factories={"贴吧": lambda: provider},
+    )
+    service.POLL_INTERVAL_SECONDS = 0
+
+    message = await service.login(FakeEvent(), "贴吧")
+
+    assert message == "Cookies 保存失败，原配置未被修改。"
+    assert config["tieba_cookies"] == "BDUSS=previous-secret"
+    assert config.save_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_tieba_logout_restores_cookie_when_save_fails():
+    config = FailingSavingConfig(tieba_cookies="BDUSS=session-secret")
+    service = AuthenticationService(
+        config,
+        provider_factories={"贴吧": lambda: None},
+    )
+
+    message = await service.logout("贴吧")
+
+    assert message == "Cookies 保存失败，原配置未被修改。"
+    assert config["tieba_cookies"] == "BDUSS=session-secret"
+    assert config.save_calls == 1
+
+
+def test_default_authentication_service_supports_bilibili_and_tieba():
+    service = AuthenticationService(
+        {"bilibili_cookies": "", "tieba_cookies": ""}
+    )
+
+    assert service.supported_platforms == ("B站", "贴吧")
+    assert service.status() == "平台登录状态：\n- B站：未配置\n- 贴吧：未配置"
+    assert "暂不支持“tieba”" in service._unsupported_platform_message("tieba")
 
 
 def test_status_and_platform_names_only_accept_chinese():

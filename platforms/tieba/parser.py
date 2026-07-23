@@ -7,8 +7,8 @@ from urllib.parse import urljoin
 
 import httpx
 
-from ..core.http import parse_cookie_header
-from ..models import BaseParser, OrderedContent, ParseContext, ParseResult
+from ...core.http import parse_cookie_header
+from ...models import BaseParser, OrderedContent, ParseContext, ParseResult
 
 
 class _TiebaPageParser(HTMLParser):
