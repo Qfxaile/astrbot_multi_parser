@@ -18,6 +18,7 @@ from ..platforms.bilibili import BilibiliLoginProvider
 from ..platforms.douyin import DouyinLoginProvider
 from ..platforms.tieba import TiebaLoginProvider
 from ..platforms.weibo import WeiboLoginProvider
+from ..platforms.wechat import WeChatLoginProvider
 from ..platforms.xiaoheihe import XiaoheiheLoginProvider
 from ..platforms.zhihu import ZhihuLoginProvider
 
@@ -52,6 +53,7 @@ class AuthenticationService:
                 "抖音": lambda: DouyinLoginProvider(self.config),
                 "贴吧": lambda: TiebaLoginProvider(self.config),
                 "微博": lambda: WeiboLoginProvider(self.config),
+                "微信": lambda: WeChatLoginProvider(self.config),
                 "小黑盒": lambda: XiaoheiheLoginProvider(self.config),
                 "知乎": lambda: ZhihuLoginProvider(self.config),
             }
@@ -61,6 +63,7 @@ class AuthenticationService:
             "抖音": "douyin_cookies",
             "贴吧": "tieba_cookies",
             "微博": "weibo_cookies",
+            "微信": "wechat_yuanbao_cookies",
             "小黑盒": "xiaoheihe_cookies",
             "知乎": "zhihu_cookies",
         }

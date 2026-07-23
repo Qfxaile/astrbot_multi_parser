@@ -184,6 +184,89 @@ async def test_douyin_logout_restores_cookie_when_save_fails():
 
 
 @pytest.mark.asyncio
+async def test_wechat_same_platform_login_is_exclusive_and_cancel_is_private():
+    started = asyncio.Event()
+
+    class WaitingWeChatProvider(FakeLoginProvider):
+        display_name = "微信"
+        cookie_config_key = "wechat_yuanbao_cookies"
+
+        async def poll_qr_status(self, session_key):
+            started.set()
+            return LoginPollResult(LoginPollState.WAITING)
+
+    first_provider = WaitingWeChatProvider([])
+    second_provider = WaitingWeChatProvider([])
+    providers = [first_provider, second_provider]
+    service = AuthenticationService(
+        {},
+        provider_factories={"微信": lambda: providers.pop(0)},
+    )
+    service.POLL_INTERVAL_SECONDS = 60
+    owner = FakeEvent("adapter:private:wechat-owner")
+    other = FakeEvent("adapter:private:other")
+    login_task = asyncio.create_task(service.login(owner, "微信"))
+    await started.wait()
+
+    duplicate_message = await service.login(other, "微信")
+
+    assert duplicate_message == "微信已有登录流程正在进行，请先取消或等待结束。"
+    assert second_provider.closed is True
+    assert await service.cancel(other) == "当前私聊没有进行中的平台登录。"
+    assert await service.cancel(owner) == "已取消当前私聊中的平台登录。"
+    assert await login_task is None
+    assert first_provider.closed is True
+
+
+@pytest.mark.asyncio
+async def test_wechat_logout_restores_cookie_when_save_fails():
+    original_cookie = "hy_user=user-secret; hy_token=token-secret"
+    config = FailingSavingConfig(wechat_yuanbao_cookies=original_cookie)
+    service = AuthenticationService(
+        config,
+        provider_factories={"微信": lambda: None},
+    )
+
+    message = await service.logout("微信")
+
+    assert message == "Cookies 保存失败，原配置未被修改。"
+    assert config["wechat_yuanbao_cookies"] == original_cookie
+    assert config.save_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_wechat_login_restores_cookie_when_save_fails_without_leaking_it():
+    original_cookie = "hy_user=old-user; hy_token=old-token"
+
+    class SuccessfulWeChatProvider(FakeLoginProvider):
+        display_name = "微信"
+        cookie_config_key = "wechat_yuanbao_cookies"
+
+    config = FailingSavingConfig(wechat_yuanbao_cookies=original_cookie)
+    provider = SuccessfulWeChatProvider(
+        [
+            LoginPollResult(
+                LoginPollState.SUCCESS,
+                "hy_user=new-user; hy_token=new-token",
+            )
+        ]
+    )
+    service = AuthenticationService(
+        config,
+        provider_factories={"微信": lambda: provider},
+    )
+
+    message = await service.login(FakeEvent(), "微信")
+
+    assert message == "Cookies 保存失败，原配置未被修改。"
+    assert config["wechat_yuanbao_cookies"] == original_cookie
+    assert config.save_calls == 1
+    assert provider.closed is True
+    assert "old-user" not in message
+    assert "new-user" not in message
+
+
+@pytest.mark.asyncio
 async def test_tieba_same_platform_login_is_exclusive_and_cancel_is_isolated():
     started = asyncio.Event()
 
@@ -470,6 +553,7 @@ def test_default_authentication_service_supports_all_login_providers():
             "douyin_cookies": "",
             "tieba_cookies": "",
             "weibo_cookies": "",
+            "wechat_yuanbao_cookies": "",
             "xiaoheihe_cookies": "",
             "zhihu_cookies": "",
         }
@@ -480,16 +564,19 @@ def test_default_authentication_service_supports_all_login_providers():
         "抖音",
         "贴吧",
         "微博",
+        "微信",
         "小黑盒",
         "知乎",
     )
     assert service.status() == (
         "平台登录状态：\n- B站：未配置\n- 抖音：未配置\n"
-        "- 贴吧：未配置\n- 微博：未配置\n- 小黑盒：未配置\n"
+        "- 贴吧：未配置\n- 微博：未配置\n- 微信：未配置\n"
+        "- 小黑盒：未配置\n"
         "- 知乎：未配置"
     )
     assert "暂不支持“tieba”" in service._unsupported_platform_message("tieba")
     assert "暂不支持“weibo”" in service._unsupported_platform_message("weibo")
+    assert "暂不支持“wechat”" in service._unsupported_platform_message("wechat")
     assert "暂不支持“小黑盒登录”" in service._unsupported_platform_message(
         "小黑盒登录"
     )

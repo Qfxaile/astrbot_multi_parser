@@ -3,6 +3,8 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from astrbot.api.message_components import Image, Node, Nodes, Plain, Record, Video
+from astrbot.core.star.filter.permission import PermissionType, PermissionTypeFilter
+from astrbot.core.star.star_handler import star_handlers_registry
 from astrbot_multi_parser import main
 from astrbot_multi_parser.core.http import CookieAccessError
 from astrbot_multi_parser.main import MultiParserPlugin, VideoSizeInfo
@@ -153,6 +155,28 @@ def test_plugin_respects_platform_switches():
     ]
 
 
+@pytest.mark.parametrize(
+    "handler_name",
+    [
+        "platform_login",
+        "platform_login_status",
+        "platform_logout",
+        "cancel_platform_login",
+    ],
+)
+def test_authentication_commands_require_global_admin(handler_name):
+    handler = getattr(MultiParserPlugin, handler_name)
+    metadata = next(
+        item for item in star_handlers_registry if item.handler is handler
+    )
+
+    assert any(
+        isinstance(event_filter, PermissionTypeFilter)
+        and event_filter.permission_type == PermissionType.ADMIN
+        for event_filter in metadata.event_filters
+    )
+
+
 async def collect_results(monkeypatch, result, event=None, **config):
     monkeypatch.setattr(
         main, "extract_context", lambda event: SimpleNamespace(combined_text="url")
@@ -169,7 +193,7 @@ async def collect_plugin_results(plugin, event):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("platform_name", ["知乎", "小黑盒"])
+@pytest.mark.parametrize("platform_name", ["知乎", "微信", "小黑盒"])
 async def test_platform_login_rejects_group_chat_before_starting_login(platform_name):
     plugin = make_plugin(ParseResult(platform="fake"))
     authentication = SimpleNamespace(login=None)
@@ -184,24 +208,27 @@ async def test_platform_login_rejects_group_chat_before_starting_login(platform_
 
 
 @pytest.mark.asyncio
-async def test_platform_login_delegates_chinese_platform_name_in_private_chat():
+@pytest.mark.parametrize("platform_name", ["知乎", "微信"])
+async def test_platform_login_delegates_chinese_platform_name_in_private_chat(
+    platform_name,
+):
     class FakeAuthentication:
         def __init__(self):
             self.calls = []
 
         async def login(self, event, platform_name):
             self.calls.append((event, platform_name))
-            return "知乎登录成功，Cookies 已保存。"
+            return f"{platform_name}登录成功，Cookies 已保存。"
 
     plugin = make_plugin(ParseResult(platform="fake"))
     authentication = FakeAuthentication()
     plugin._authentication = authentication
     event = FakeEvent()
 
-    messages = [item async for item in plugin.platform_login(event, "知乎")]
+    messages = [item async for item in plugin.platform_login(event, platform_name)]
 
-    assert messages[0][0].text == "知乎登录成功，Cookies 已保存。"
-    assert authentication.calls == [(event, "知乎")]
+    assert messages[0][0].text == f"{platform_name}登录成功，Cookies 已保存。"
+    assert authentication.calls == [(event, platform_name)]
 
 
 @pytest.mark.asyncio
