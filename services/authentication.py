@@ -16,6 +16,7 @@ from ..core.authentication import (
 from ..core.http import parse_cookie_header
 from ..platforms.bilibili import BilibiliLoginProvider
 from ..platforms.douyin import DouyinLoginProvider
+from ..platforms.tieba import TiebaLoginProvider
 from ..platforms.zhihu import ZhihuLoginProvider
 
 ProviderFactory = Callable[[], PlatformLoginProvider]
@@ -47,12 +48,14 @@ class AuthenticationService:
             or {
                 "B站": lambda: BilibiliLoginProvider(self.config),
                 "抖音": lambda: DouyinLoginProvider(self.config),
+                "贴吧": lambda: TiebaLoginProvider(self.config),
                 "知乎": lambda: ZhihuLoginProvider(self.config),
             }
         )
         self._cookie_keys = {
             "B站": "bilibili_cookies",
             "抖音": "douyin_cookies",
+            "贴吧": "tieba_cookies",
             "知乎": "zhihu_cookies",
         }
         self._active_logins: dict[str, _ActiveLogin] = {}

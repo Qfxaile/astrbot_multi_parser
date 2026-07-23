@@ -2,6 +2,7 @@ import httpx
 import pytest
 from astrbot_multi_parser.models import ParseContext
 from astrbot_multi_parser.platforms import tieba
+from astrbot_multi_parser.platforms.tieba import parser as tieba_parser
 
 
 @pytest.mark.asyncio
@@ -144,7 +145,7 @@ async def test_parse_materializes_images_without_leaking_tieba_cookies(
         return httpx.Response(404)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    monkeypatch.setattr(tieba.httpx, "AsyncClient", lambda **kwargs: client)
+    monkeypatch.setattr(tieba_parser.httpx, "AsyncClient", lambda **kwargs: client)
 
     result = await tieba.TiebaParser(
         {
