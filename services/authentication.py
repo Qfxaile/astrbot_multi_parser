@@ -16,6 +16,7 @@ from ..core.authentication import (
 from ..core.http import parse_cookie_header
 from ..platforms.bilibili import BilibiliLoginProvider
 from ..platforms.douyin import DouyinLoginProvider
+from ..platforms.wechat import WeChatLoginProvider
 
 ProviderFactory = Callable[[], PlatformLoginProvider]
 
@@ -46,11 +47,13 @@ class AuthenticationService:
             or {
                 "B站": lambda: BilibiliLoginProvider(self.config),
                 "抖音": lambda: DouyinLoginProvider(self.config),
+                "微信": lambda: WeChatLoginProvider(self.config),
             }
         )
         self._cookie_keys = {
             "B站": "bilibili_cookies",
             "抖音": "douyin_cookies",
+            "微信": "wechat_yuanbao_cookies",
         }
         self._active_logins: dict[str, _ActiveLogin] = {}
         self._lock = asyncio.Lock()

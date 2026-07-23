@@ -178,16 +178,103 @@ async def test_douyin_logout_restores_cookie_when_save_fails():
     assert config.save_calls == 1
 
 
-def test_default_authentication_service_supports_bilibili_and_douyin():
+@pytest.mark.asyncio
+async def test_wechat_same_platform_login_is_exclusive_and_cancel_is_private():
+    started = asyncio.Event()
+
+    class WaitingWeChatProvider(FakeLoginProvider):
+        display_name = "微信"
+        cookie_config_key = "wechat_yuanbao_cookies"
+
+        async def poll_qr_status(self, session_key):
+            started.set()
+            return LoginPollResult(LoginPollState.WAITING)
+
+    first_provider = WaitingWeChatProvider([])
+    second_provider = WaitingWeChatProvider([])
+    providers = [first_provider, second_provider]
     service = AuthenticationService(
-        {"bilibili_cookies": "", "douyin_cookies": ""}
+        {},
+        provider_factories={"微信": lambda: providers.pop(0)},
+    )
+    service.POLL_INTERVAL_SECONDS = 60
+    owner = FakeEvent("adapter:private:wechat-owner")
+    other = FakeEvent("adapter:private:other")
+    login_task = asyncio.create_task(service.login(owner, "微信"))
+    await started.wait()
+
+    duplicate_message = await service.login(other, "微信")
+
+    assert duplicate_message == "微信已有登录流程正在进行，请先取消或等待结束。"
+    assert second_provider.closed is True
+    assert await service.cancel(other) == "当前私聊没有进行中的平台登录。"
+    assert await service.cancel(owner) == "已取消当前私聊中的平台登录。"
+    assert await login_task is None
+
+
+@pytest.mark.asyncio
+async def test_wechat_logout_restores_cookie_when_save_fails():
+    original_cookie = "hy_user=user-secret; hy_token=token-secret"
+    config = FailingSavingConfig(wechat_yuanbao_cookies=original_cookie)
+    service = AuthenticationService(
+        config,
+        provider_factories={"微信": lambda: None},
     )
 
-    assert service.supported_platforms == ("B站", "抖音")
+    message = await service.logout("微信")
+
+    assert message == "Cookies 保存失败，原配置未被修改。"
+    assert config["wechat_yuanbao_cookies"] == original_cookie
+    assert config.save_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_wechat_login_restores_cookie_when_save_fails_without_leaking_it():
+    original_cookie = "hy_user=old-user; hy_token=old-token"
+
+    class SuccessfulWeChatProvider(FakeLoginProvider):
+        display_name = "微信"
+        cookie_config_key = "wechat_yuanbao_cookies"
+
+    config = FailingSavingConfig(wechat_yuanbao_cookies=original_cookie)
+    provider = SuccessfulWeChatProvider(
+        [
+            LoginPollResult(
+                LoginPollState.SUCCESS,
+                "hy_user=new-user; hy_token=new-token",
+            )
+        ]
+    )
+    service = AuthenticationService(
+        config,
+        provider_factories={"微信": lambda: provider},
+    )
+
+    message = await service.login(FakeEvent(), "微信")
+
+    assert message == "Cookies 保存失败，原配置未被修改。"
+    assert config["wechat_yuanbao_cookies"] == original_cookie
+    assert config.save_calls == 1
+    assert provider.closed is True
+    assert "old-user" not in message
+    assert "new-user" not in message
+
+
+def test_default_authentication_service_supports_all_qr_platforms():
+    service = AuthenticationService(
+        {
+            "bilibili_cookies": "",
+            "douyin_cookies": "",
+            "wechat_yuanbao_cookies": "",
+        }
+    )
+
+    assert service.supported_platforms == ("B站", "抖音", "微信")
     assert service.status() == (
-        "平台登录状态：\n- B站：未配置\n- 抖音：未配置"
+        "平台登录状态：\n- B站：未配置\n- 抖音：未配置\n- 微信：未配置"
     )
     assert "暂不支持“douyin”" in service._unsupported_platform_message("douyin")
+    assert "暂不支持“wechat”" in service._unsupported_platform_message("wechat")
 
 
 def test_status_and_platform_names_only_accept_chinese():
