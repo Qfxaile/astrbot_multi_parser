@@ -142,7 +142,7 @@ async def test_short_channels_url_requires_yuanbao_cookie(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_short_channels_url_exchanges_token_and_keeps_cookie_on_yuanbao(
+async def test_short_channels_url_uses_yuanbao_headers_without_leaking_them(
     monkeypatch,
 ):
     requested_hosts = []
@@ -150,7 +150,9 @@ async def test_short_channels_url_exchanges_token_and_keeps_cookie_on_yuanbao(
     def handler(request: httpx.Request) -> httpx.Response:
         requested_hosts.append(request.url.host)
         if request.url.host == "yuanbao.tencent.com":
-            assert request.headers["Cookie"] == "yuanbao_session=secret"
+            assert "Cookie" not in request.headers
+            assert request.headers["X-ID"] == "user-secret"
+            assert request.headers["X-Token"] == "token-secret"
             assert json.loads(request.content) == {
                 "type": "video_channel_url",
                 "url": "https://weixin.qq.com/sph/A2pnEaFGeM",
@@ -172,6 +174,8 @@ async def test_short_channels_url_exchanges_token_and_keeps_cookie_on_yuanbao(
 
         assert request.url.host == "channels.weixin.qq.com"
         assert "cookie" not in request.headers
+        assert "X-ID" not in request.headers
+        assert "X-Token" not in request.headers
         assert json.loads(request.content) == {
             "baseReq": {"generalToken": "general-token"},
             "exportId": "export-id",
@@ -196,7 +200,11 @@ async def test_short_channels_url_exchanges_token_and_keeps_cookie_on_yuanbao(
 
     install_mock_client(monkeypatch, handler)
     parser = WeChatParser(
-        {"wechat_yuanbao_cookies": "yuanbao_session=secret"}
+        {
+            "wechat_yuanbao_cookies": (
+                "yb_user_id=user-secret; yb_token=token-secret"
+            )
+        }
     )
 
     result = await parser.parse(

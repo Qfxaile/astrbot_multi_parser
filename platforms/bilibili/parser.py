@@ -4,7 +4,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-from ...core.http import build_cookies
+from ...core.http import build_cookies, cookie_config_value
 from ...models import BaseParser, OrderedContent, ParseContext, ParseResult
 from ...utils import replace_links
 
@@ -527,7 +527,8 @@ class BilibiliParser(BaseParser):
     def _cookies(self) -> httpx.Cookies:
         """构造仅作用于哔哩哔哩域名的 Cookie Jar。"""
         return build_cookies(
-            self.config.get("bilibili_cookies", ""), (".bilibili.com",)
+            cookie_config_value(self.config, "bilibili_cookies"),
+            (".bilibili.com",),
         )
 
     def _raise_for_api_cookie_error(self, payload: object) -> None:

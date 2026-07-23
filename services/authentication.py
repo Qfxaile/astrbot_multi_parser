@@ -13,7 +13,11 @@ from ..core.authentication import (
     PlatformLoginError,
     PlatformLoginProvider,
 )
-from ..core.http import parse_cookie_header
+from ..core.http import (
+    cookie_config_value,
+    parse_cookie_header,
+    set_cookie_config_value,
+)
 from ..platforms.bilibili import BilibiliLoginProvider
 from ..platforms.douyin import DouyinLoginProvider
 from ..platforms.redbook import RedBookLoginProvider
@@ -156,9 +160,12 @@ class AuthenticationService:
                     pass
             return self._expired_message(provider)
         except PlatformLoginError as exc:
-            return str(exc)
+            return self._format_login_error(platform_name, exc)
         except Exception:
-            return f"{platform_name}登录流程异常，请稍后重试。"
+            return self._format_login_error(
+                platform_name,
+                "登录流程异常，请稍后重试。",
+            )
         finally:
             await provider.close()
             async with self._lock:
@@ -191,7 +198,7 @@ class AuthenticationService:
             attempt = self._active_logins.get(platform_name)
             if attempt is not None:
                 attempt.cancel_event.set()
-            if not parse_cookie_header(self.config.get(cookie_key, "")):
+            if not parse_cookie_header(cookie_config_value(self.config, cookie_key)):
                 return f"{platform_name}当前没有已保存的 Cookies。"
             try:
                 self._save_cookie(cookie_key, "")
@@ -204,7 +211,9 @@ class AuthenticationService:
         lines = ["平台登录状态："]
         for platform_name in self.supported_platforms:
             cookie_key = self._cookie_keys[platform_name]
-            configured = bool(parse_cookie_header(self.config.get(cookie_key, "")))
+            configured = bool(
+                parse_cookie_header(cookie_config_value(self.config, cookie_key))
+            )
             active = platform_name in self._active_logins
             state = "登录中" if active else "已配置" if configured else "未配置"
             lines.append(f"- {platform_name}：{state}")
@@ -221,15 +230,15 @@ class AuthenticationService:
 
     def _save_cookie(self, cookie_key: str, cookie_header: str) -> None:
         # 配置保存失败时恢复内存值，避免解析器使用尚未真正落盘的登录态。
-        previous_value = self.config.get(cookie_key, "")
-        self.config[cookie_key] = cookie_header
+        previous_value = cookie_config_value(self.config, cookie_key)
+        set_cookie_config_value(self.config, cookie_key, cookie_header)
         save_config = getattr(self.config, "save_config", None)
         if not callable(save_config):
             return
         try:
             save_config()
         except Exception as exc:
-            self.config[cookie_key] = previous_value
+            set_cookie_config_value(self.config, cookie_key, str(previous_value or ""))
             raise PlatformLoginError("Cookies 保存失败，原配置未被修改。") from exc
 
     def _unsupported_platform_message(self, platform_name: str) -> str:
@@ -239,11 +248,27 @@ class AuthenticationService:
         return f"暂不支持“{platform_name}”登录。当前支持：{supported}。"
 
     @staticmethod
+    def _format_login_error(
+        platform_name: str,
+        error: PlatformLoginError | str,
+    ) -> str:
+        """在私聊边界统一平台登录错误格式，并去除重复的平台前缀。"""
+        detail = str(error).strip() or "发生未知错误，请稍后重试。"
+        for prefix in (f"{platform_name}登录", platform_name):
+            if detail.startswith(prefix):
+                detail = detail[len(prefix) :].lstrip("：:，, ")
+                break
+        return f"登录失败｜平台：{platform_name}｜原因：{detail}"
+
+    @staticmethod
     def _expired_message(provider: PlatformLoginProvider) -> str:
-        message = f"{provider.display_name}登录二维码已过期，请重新发起登录。"
+        message = "二维码已过期，请重新发起登录。"
         if not provider.sms_fallback_available:
             message += "该平台短信登录需要额外人机验证，当前私聊流程暂不支持。"
-        return message
+        return AuthenticationService._format_login_error(
+            provider.display_name,
+            message,
+        )
 
     @staticmethod
     def _session_id(event: AstrMessageEvent) -> str:

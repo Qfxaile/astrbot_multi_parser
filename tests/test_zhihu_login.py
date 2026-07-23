@@ -7,11 +7,34 @@ from astrbot_multi_parser.core.authentication import (
 from astrbot_multi_parser.platforms.zhihu.login import ZhihuLoginProvider
 
 
+def bootstrap_response(
+    request: httpx.Request,
+    *,
+    browser_id: str = "official-browser-id",
+) -> httpx.Response | None:
+    """为二维码测试模拟知乎登录页明确下发设备标识。"""
+    if request.method != "GET" or request.url.path != "/signin":
+        return None
+    return httpx.Response(
+        200,
+        request=request,
+        headers={"x-du-bid": browser_id},
+        text="<html>signin</html>",
+    )
+
+
 @pytest.mark.asyncio
 async def test_zhihu_qr_login_creates_challenge_from_trusted_url():
+    requested_paths = []
+
     def handler(request: httpx.Request) -> httpx.Response:
+        requested_paths.append(request.url.path)
+        bootstrap = bootstrap_response(request)
+        if bootstrap is not None:
+            return bootstrap
         assert request.method == "POST"
         assert request.url.path == "/api/v3/account/api/login/qrcode"
+        assert request.headers["x-du-bid"] == "official-browser-id"
         return httpx.Response(
             200,
             request=request,
@@ -29,6 +52,41 @@ async def test_zhihu_qr_login_creates_challenge_from_trusted_url():
     assert challenge.session_key == "one-time-token"
     assert challenge.image_bytes.startswith(b"\x89PNG")
     assert challenge.expires_in_seconds == 180
+    assert requested_paths == [
+        "/signin",
+        "/api/v3/account/api/login/qrcode",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_zhihu_qr_login_reuses_trusted_bootstrap_cookie_as_header():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/signin":
+            return httpx.Response(
+                200,
+                request=request,
+                headers={
+                    "Set-Cookie": (
+                        "x-du-bid=official-cookie-id; Domain=.zhihu.com; Path=/; Secure"
+                    )
+                },
+                text="<html>signin</html>",
+            )
+        assert request.headers["x-du-bid"] == "official-cookie-id"
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "token": "one-time-token",
+                "link": "https://www.zhihu.com/account/scan/login",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = ZhihuLoginProvider({}, client=client)
+        challenge = await provider.create_qr_challenge()
+
+    assert challenge.session_key == "one-time-token"
 
 
 @pytest.mark.asyncio
@@ -118,6 +176,9 @@ async def test_zhihu_qr_login_rejects_unknown_status_without_leaking_token():
 @pytest.mark.asyncio
 async def test_zhihu_qr_login_rejects_untrusted_qr_url_without_leaking_token():
     def handler(request: httpx.Request) -> httpx.Response:
+        bootstrap = bootstrap_response(request)
+        if bootstrap is not None:
+            return bootstrap
         return httpx.Response(
             200,
             request=request,
@@ -139,10 +200,28 @@ async def test_zhihu_qr_login_rejects_untrusted_qr_url_without_leaking_token():
 @pytest.mark.asyncio
 async def test_zhihu_qr_login_rejects_oversized_response():
     def handler(request: httpx.Request) -> httpx.Response:
+        bootstrap = bootstrap_response(request)
+        if bootstrap is not None:
+            return bootstrap
         return httpx.Response(
             200,
             request=request,
             content=b"x" * (ZhihuLoginProvider.MAX_RESPONSE_BYTES + 1),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = ZhihuLoginProvider({}, client=client)
+        with pytest.raises(PlatformLoginError, match="超过安全限制"):
+            await provider.create_qr_challenge()
+
+
+@pytest.mark.asyncio
+async def test_zhihu_qr_login_rejects_oversized_bootstrap_response():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            content=(b"x" * (ZhihuLoginProvider.MAX_BOOTSTRAP_RESPONSE_BYTES + 1)),
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -157,6 +236,9 @@ async def test_zhihu_qr_login_rejects_redirect_without_following_target():
 
     def handler(request: httpx.Request) -> httpx.Response:
         requested_hosts.append(request.url.host)
+        bootstrap = bootstrap_response(request)
+        if bootstrap is not None:
+            return bootstrap
         return httpx.Response(
             302,
             request=request,
@@ -171,6 +253,67 @@ async def test_zhihu_qr_login_rejects_redirect_without_following_target():
         with pytest.raises(PlatformLoginError, match="不安全的重定向"):
             await provider.create_qr_challenge()
 
+    assert requested_hosts == ["www.zhihu.com", "www.zhihu.com"]
+
+
+@pytest.mark.asyncio
+async def test_zhihu_qr_login_follows_only_trusted_bootstrap_redirects():
+    requested_urls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.url.path == "/signin":
+            return httpx.Response(
+                302,
+                request=request,
+                headers={"Location": "https://www.zhihu.com/signin/bootstrap"},
+            )
+        if request.url.path == "/signin/bootstrap":
+            return httpx.Response(
+                200,
+                request=request,
+                headers={"x-du-bid": "redirect-browser-id"},
+                text="<html>signin</html>",
+            )
+        assert request.headers["x-du-bid"] == "redirect-browser-id"
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "token": "one-time-token",
+                "link": "https://www.zhihu.com/account/scan/login",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = ZhihuLoginProvider({}, client=client)
+        challenge = await provider.create_qr_challenge()
+
+    assert challenge.session_key == "one-time-token"
+    assert requested_urls == [
+        "https://www.zhihu.com/signin",
+        "https://www.zhihu.com/signin/bootstrap",
+        "https://www.zhihu.com/api/v3/account/api/login/qrcode",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_zhihu_qr_login_rejects_untrusted_bootstrap_redirect():
+    requested_hosts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_hosts.append(request.url.host)
+        return httpx.Response(
+            302,
+            request=request,
+            headers={"Location": "https://example.com/steal-device"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = ZhihuLoginProvider({}, client=client)
+        with pytest.raises(PlatformLoginError, match="不安全的重定向"):
+            await provider.create_qr_challenge()
+
     assert requested_hosts == ["www.zhihu.com"]
 
 
@@ -181,7 +324,7 @@ async def test_zhihu_qr_login_reports_platform_verification_page():
             200,
             request=request,
             headers={"Content-Type": "text/html; charset=utf-8"},
-            text="<html>captcha verify security</html>",
+            text='<html><div id="captcha"></div></html>',
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -193,6 +336,9 @@ async def test_zhihu_qr_login_reports_platform_verification_page():
 @pytest.mark.asyncio
 async def test_zhihu_qr_login_reports_json_verification_without_leaking_ticket():
     def handler(request: httpx.Request) -> httpx.Response:
+        bootstrap = bootstrap_response(request)
+        if bootstrap is not None:
+            return bootstrap
         return httpx.Response(
             200,
             request=request,
@@ -227,6 +373,97 @@ async def test_zhihu_qr_login_hides_network_error_details():
 
     assert "network-secret" not in str(exc_info.value)
     assert "example.com" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_zhihu_qr_login_reports_required_browser_id():
+    def handler(request: httpx.Request) -> httpx.Response:
+        bootstrap = bootstrap_response(request)
+        if bootstrap is not None:
+            return bootstrap
+        return httpx.Response(
+            400,
+            request=request,
+            json={
+                "error": {
+                    "code": 1000,
+                    "message": "required request header x-du-bid is missing",
+                    "detail": "request detail must not leak",
+                }
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = ZhihuLoginProvider({}, client=client)
+        with pytest.raises(PlatformLoginError, match="浏览器设备标识") as exc_info:
+            await provider.create_qr_challenge()
+
+    assert "request detail" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_zhihu_qr_login_does_not_misreport_generic_code_1000():
+    def handler(request: httpx.Request) -> httpx.Response:
+        bootstrap = bootstrap_response(request)
+        if bootstrap is not None:
+            return bootstrap
+        return httpx.Response(
+            400,
+            request=request,
+            json={
+                "error": {
+                    "code": 1000,
+                    "message": "ordinary invalid parameter secret-detail",
+                }
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = ZhihuLoginProvider({}, client=client)
+        with pytest.raises(PlatformLoginError, match="请求失败") as exc_info:
+            await provider.create_qr_challenge()
+
+    assert "浏览器设备标识" not in str(exc_info.value)
+    assert "secret-detail" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_zhihu_qr_login_rejects_unsafe_bootstrap_browser_id():
+    requested_paths = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_paths.append(request.url.path)
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"x-du-bid": "unsafe;browser-id"},
+            text="<html>signin</html>",
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = ZhihuLoginProvider({}, client=client)
+        with pytest.raises(PlatformLoginError, match="官方浏览器下发"):
+            await provider.create_qr_challenge()
+
+    assert requested_paths == ["/signin"]
+
+
+@pytest.mark.asyncio
+async def test_zhihu_qr_login_does_not_derive_browser_id_from_existing_cookies():
+    requested_paths = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_paths.append(request.url.path)
+        return httpx.Response(200, request=request, text="<html>signin</html>")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        client.cookies.set("d_c0", "device-cookie", domain=".zhihu.com")
+        client.cookies.set("x-du-bid", "preexisting-id", domain=".zhihu.com")
+        provider = ZhihuLoginProvider({}, client=client)
+        with pytest.raises(PlatformLoginError, match="官方浏览器下发"):
+            await provider.create_qr_challenge()
+
+    assert requested_paths == ["/signin"]
 
 
 @pytest.mark.asyncio

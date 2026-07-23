@@ -4,6 +4,7 @@ from astrbot_multi_parser.core.http import CookieAccessError
 from astrbot_multi_parser.models import ParseContext
 from astrbot_multi_parser.platforms import douyin
 from astrbot_multi_parser.platforms.douyin import music as douyin_music
+from astrbot_multi_parser.platforms.douyin import parser as douyin_parser
 
 
 def test_douyin_login_redirect_reports_stale_cookie_without_leak():
@@ -153,7 +154,7 @@ async def test_short_link_redirects_to_qishui_track(
 
     real_async_client = httpx.AsyncClient
     monkeypatch.setattr(
-        douyin.httpx,
+        douyin_parser.httpx,
         "AsyncClient",
         lambda **kwargs: real_async_client(
             transport=httpx.MockTransport(handler), **kwargs
@@ -357,7 +358,7 @@ async def test_parse_materializes_images_without_leaking_douyin_cookies(
 
     real_async_client = httpx.AsyncClient
     monkeypatch.setattr(
-        douyin.httpx,
+        douyin_parser.httpx,
         "AsyncClient",
         lambda **kwargs: real_async_client(
             transport=httpx.MockTransport(handler), **kwargs
@@ -419,7 +420,7 @@ async def test_parse_keeps_failed_douyin_image_slot(
         headers=douyin.DouyinParser.IOS_HEADERS,
         cookies={"ttwid": "test-session"},
     )
-    monkeypatch.setattr(douyin.httpx, "AsyncClient", lambda **kwargs: client)
+    monkeypatch.setattr(douyin_parser.httpx, "AsyncClient", lambda **kwargs: client)
 
     result = await douyin.DouyinParser({}).parse(ParseContext(text=share_url))
 
@@ -475,7 +476,7 @@ async def test_parse_materializes_video_cover(monkeypatch, assert_temporary_imag
         headers=douyin.DouyinParser.IOS_HEADERS,
         cookies={"ttwid": "test-session"},
     )
-    monkeypatch.setattr(douyin.httpx, "AsyncClient", lambda **kwargs: client)
+    monkeypatch.setattr(douyin_parser.httpx, "AsyncClient", lambda **kwargs: client)
 
     result = await douyin.DouyinParser({}).parse(ParseContext(text=share_url))
 
@@ -537,7 +538,7 @@ async def test_parse_slides_materializes_original_candidates_in_place(
         constructor_kwargs.update(kwargs)
         return real_async_client(transport=httpx.MockTransport(handler), **kwargs)
 
-    monkeypatch.setattr(douyin.httpx, "AsyncClient", client_factory)
+    monkeypatch.setattr(douyin_parser.httpx, "AsyncClient", client_factory)
 
     result = await douyin.DouyinParser(
         {"douyin_cookies": "sessionid=slides-session"}
@@ -588,7 +589,7 @@ async def test_parse_keeps_unsafe_douyin_candidates_without_requesting_them(
 
     real_async_client = httpx.AsyncClient
     monkeypatch.setattr(
-        douyin.httpx,
+        douyin_parser.httpx,
         "AsyncClient",
         lambda **kwargs: real_async_client(
             transport=httpx.MockTransport(handler), **kwargs

@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import httpx
 
-from ...core.http import build_cookies
+from ...core.http import build_cookies, cookie_config_value
 from ...models import BaseParser, OrderedContent, ParseContext, ParseResult
 
 
@@ -138,7 +138,7 @@ class WeiboParser(BaseParser):
 
     def _cookies(self) -> httpx.Cookies:
         return build_cookies(
-            self.config.get("weibo_cookies", ""),
+            cookie_config_value(self.config, "weibo_cookies"),
             (".weibo.com", ".weibo.cn"),
         )
 

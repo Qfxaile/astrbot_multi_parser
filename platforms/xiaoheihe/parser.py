@@ -3,7 +3,7 @@ import re
 import httpx
 
 from ...core.contracts import ParseContext, ParseResult
-from ...core.http import parse_cookie_header
+from ...core.http import cookie_config_value, parse_cookie_header
 from ...core.parser import BaseParser
 from .fingerprint import V4_DATA, V4_EP
 from .game import (
@@ -109,7 +109,7 @@ class XiaoheiheParser(BaseParser):
         return {
             name: value
             for name, value in parse_cookie_header(
-                self.config.get("xiaoheihe_cookies", "")
+                cookie_config_value(self.config, "xiaoheihe_cookies")
             )
             if name in allowed and value
         }

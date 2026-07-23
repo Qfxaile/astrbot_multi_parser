@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Mapping
 from urllib.parse import parse_qsl, urljoin, urlsplit
 
 import httpx
@@ -33,6 +34,8 @@ class WeiboLoginProvider(PlatformLoginProvider):
     MAX_QR_IMAGE_BYTES = 512 * 1024
     MAX_CROSS_DOMAIN_URLS = 5
     MAX_LOGIN_REDIRECTS = 5
+    MAX_CONFIRMATION_DEPTH = 6
+    MAX_CONFIRMATION_CONTAINERS = 128
     COOKIE_NAMES = ("SUB",)
     QR_IMAGE_HOST_SUFFIXES = ("qr.weibo.cn",)
     SUCCESS_HOST_SUFFIXES = ("weibo.com", "weibo.cn")
@@ -42,7 +45,6 @@ class WeiboLoginProvider(PlatformLoginProvider):
         "Chrome/124.0.0.0 Safari/537.36"
     )
     _QRID_PATTERN = re.compile(r"[A-Za-z0-9._~-]{1,256}")
-    _ALT_PATTERN = re.compile(r"[A-Za-z0-9+/=_-]{1,1024}")
     _CALLBACK_PATTERN = re.compile(r"STK_[0-9]{10,32}")
     _REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 
@@ -120,9 +122,8 @@ class WeiboLoginProvider(PlatformLoginProvider):
         if retcode != "20000000":
             raise PlatformLoginError("微博返回了无法识别的登录状态，请重新发起登录。")
 
-        data = payload.get("data")
-        alt = str(data.get("alt") or "") if isinstance(data, dict) else ""
-        if self._ALT_PATTERN.fullmatch(alt) is None:
+        alt = self._find_sso_token(payload)
+        if not alt:
             raise PlatformLoginError("微博返回了无效的登录确认信息。")
 
         await self._complete_sso_login(alt)
@@ -162,10 +163,16 @@ class WeiboLoginProvider(PlatformLoginProvider):
         # 避免令牌被自动带往列表之外的主机。
         trusted_urls: list[str] = []
         for value in urls:
-            url = str(value or "")
+            if not isinstance(value, str):
+                continue
+            url = value.strip()
+            # SSO 可能同时返回其他产品的跨域地址。只保留微博受信任域，
+            # 未知地址不得参与请求，也不能让它阻断可用的微博登录地址。
             if len(url) > 2048 or not self._is_trusted_success_url(url):
-                raise PlatformLoginError("微博返回了无效的登录确认信息。")
+                continue
             trusted_urls.append(self._with_cross_domain_action(url))
+        if not trusted_urls:
+            raise PlatformLoginError("微博返回了无效的登录确认信息。")
         for url in trusted_urls:
             await self._visit_success_url(url)
 
@@ -305,7 +312,8 @@ class WeiboLoginProvider(PlatformLoginProvider):
             and parsed.password is None
             and port in {None, 443}
             and not parsed.fragment
-            and (parsed.hostname or "").lower() == "login.sina.com.cn"
+            and (parsed.hostname or "").lower()
+            in {"login.sina.com.cn", "passport.sina.com.cn"}
         )
 
     @staticmethod
@@ -364,6 +372,34 @@ class WeiboLoginProvider(PlatformLoginProvider):
     @staticmethod
     def _callback_name() -> str:
         return f"STK_{time.time_ns() // 100_000}"
+
+    @staticmethod
+    def _is_safe_sso_token(value: str) -> bool:
+        """允许官方令牌扩展字符，同时拒绝控制字符和异常长度。"""
+        return bool(value) and len(value) <= 2048 and all(
+            character.isprintable() for character in value
+        )
+
+    @classmethod
+    def _find_sso_token(cls, payload: Mapping[str, object]) -> str:
+        """在受限层级和容器数内查找官方精确 ``alt`` 字段。"""
+        pending: list[tuple[object, int]] = [(payload, 0)]
+        visited_containers = 0
+        while pending and visited_containers < cls.MAX_CONFIRMATION_CONTAINERS:
+            value, depth = pending.pop()
+            if not isinstance(value, (Mapping, list)):
+                continue
+            visited_containers += 1
+            if isinstance(value, Mapping):
+                candidate = value.get("alt")
+                if isinstance(candidate, str) and cls._is_safe_sso_token(candidate):
+                    return candidate
+                children = value.values()
+            else:
+                children = value
+            if depth < cls.MAX_CONFIRMATION_DEPTH:
+                pending.extend((child, depth + 1) for child in children)
+        return ""
 
     @staticmethod
     def _contains_verification_markers(content: bytes) -> bool:

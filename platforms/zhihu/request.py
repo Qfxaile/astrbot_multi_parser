@@ -8,6 +8,7 @@ import httpx
 from ...core.http import (
     build_cookie_access_error,
     build_cookies,
+    cookie_config_value,
     raise_for_cookie_access,
     request_timeout,
 )
@@ -48,7 +49,7 @@ class ZhihuRequest:
 
     def _cookie_value(self) -> object:
         """读取知乎 Cookie 原始配置，仅供核心 Cookie 工具消费。"""
-        return self.config.get(self.COOKIE_CONFIG_KEY, "")
+        return cookie_config_value(self.config, self.COOKIE_CONFIG_KEY)
 
     async def get_json(self, client, url: str, *, params: dict | None = None) -> dict:
         response = await client.get(url, params=params)

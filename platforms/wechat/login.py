@@ -1,8 +1,10 @@
-"""实现微信扫码授权与腾讯元宝 Cookie 提取。"""
+"""实现微信扫码授权与腾讯元宝登录令牌提取。"""
 
+import json
 import re
 import secrets
 import string
+from collections.abc import Mapping
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from urllib.parse import urlencode, urljoin, urlsplit
@@ -24,7 +26,6 @@ class _WeChatQRSession:
     """保存一次微信开放平台授权所需的内存态。"""
 
     uuid: str
-    nonce: str
     last_status: int | None = None
 
 
@@ -61,14 +62,12 @@ class WeChatLoginProvider(PlatformLoginProvider):
     QR_IMAGE_HOST = "open.weixin.qq.com"
     QR_POLL_URL = "https://long.open.weixin.qq.com/connect/l/qrconnect"
     CALLBACK_URL = "https://yuanbao.tencent.com/scan"
-    YUANBAO_HOST = "yuanbao.tencent.com"
+    YUANBAO_LOGIN_URL = "https://yuanbao.tencent.com/api/joint/login"
     QR_EXPIRES_IN_SECONDS = 300
     MAX_AUTH_PAGE_BYTES = 512 * 1024
     MAX_QR_IMAGE_BYTES = 512 * 1024
     MAX_POLL_RESPONSE_BYTES = 16 * 1024
-    MAX_CALLBACK_RESPONSE_BYTES = 512 * 1024
-    MAX_LOGIN_REDIRECTS = 5
-    COOKIE_NAMES = ("hy_user", "hy_token")
+    MAX_LOGIN_RESPONSE_BYTES = 128 * 1024
     USER_AGENT = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -148,7 +147,7 @@ class WeChatLoginProvider(PlatformLoginProvider):
 
         image_bytes = await self._download_qr_image(qr_url)
         session_key = secrets.token_urlsafe(32)
-        self._sessions[session_key] = _WeChatQRSession(uuid=uuid, nonce=nonce)
+        self._sessions[session_key] = _WeChatQRSession(uuid=uuid)
         return QRLoginChallenge(
             session_key=session_key,
             image_bytes=image_bytes,
@@ -156,7 +155,7 @@ class WeChatLoginProvider(PlatformLoginProvider):
         )
 
     async def poll_qr_status(self, session_key: str) -> LoginPollResult:
-        """轮询扫码状态，成功后完成元宝回调并提取最小 Cookie。"""
+        """轮询扫码状态，成功后用授权码换取元宝最小登录令牌。"""
         session = self._sessions.get(session_key)
         if session is None:
             raise PlatformLoginError("微信登录会话无效，请重新发起登录。")
@@ -206,17 +205,11 @@ class WeChatLoginProvider(PlatformLoginProvider):
         if poll_status == 405:
             if self._AUTH_CODE_PATTERN.fullmatch(auth_code) is None:
                 raise PlatformLoginError("微信返回了无效的登录确认信息。")
-            await self._complete_yuanbao_login(
-                nonce=session.nonce,
-                auth_code=auth_code.decode("ascii"),
+            credential_header = await self._complete_yuanbao_login(
+                auth_code.decode("ascii")
             )
             self._sessions.pop(session_key, None)
-            cookie_header = self._cookie_header()
-            if not all(f"{name}=" in cookie_header for name in self.COOKIE_NAMES):
-                raise PlatformLoginError(
-                    "微信登录成功，但响应中缺少有效的腾讯元宝登录凭据。"
-                )
-            return LoginPollResult(LoginPollState.SUCCESS, cookie_header)
+            return LoginPollResult(LoginPollState.SUCCESS, credential_header)
 
         raise PlatformLoginError(
             "微信返回了无法识别的登录状态，请重新发起登录。"
@@ -256,49 +249,65 @@ class WeChatLoginProvider(PlatformLoginProvider):
 
     async def _complete_yuanbao_login(
         self,
-        *,
-        nonce: str,
         auth_code: str,
-    ) -> None:
-        # 微信授权码只发送到元宝回调；后续 Location 每一跳都重新校验，
-        # 防止平台异常响应把一次性凭据或已写入的 Cookie 带到外域。
-        current_url = self.CALLBACK_URL
-        request_params: dict[str, str] | None = {
-            "nonce": nonce,
-            "code": auth_code,
-            "state": "wechat_login",
-        }
-        for _ in range(self.MAX_LOGIN_REDIRECTS + 1):
-            if not self._is_trusted_yuanbao_url(current_url):
-                raise PlatformLoginError("微信返回了无效的登录确认信息。")
-            try:
-                content, _, status_code, location = (
-                    await self._read_limited_response(
-                        current_url,
-                        limit=self.MAX_CALLBACK_RESPONSE_BYTES,
-                        params=request_params,
-                    )
-                )
-            except PlatformLoginError:
-                raise
-            except httpx.HTTPError as exc:
-                raise PlatformLoginError(
-                    "微信登录确认请求失败，请稍后重试。"
-                ) from exc
-            request_params = None
+    ) -> str:
+        # 当前元宝网页不会通过 /scan 写 Cookie，而是将微信授权码交给
+        # /api/joint/login，并把响应令牌保存在浏览器 localStorage。
+        try:
+            async with self._client.stream(
+                "POST",
+                self.YUANBAO_LOGIN_URL,
+                follow_redirects=False,
+                json={
+                    "type": "wx",
+                    "jsCode": auth_code,
+                    "appid": self.OAUTH_APP_ID,
+                    "apiFeature": "team",
+                },
+                headers={
+                    "Accept": "application/json, text/plain, */*",
+                    "Content-Type": "application/json",
+                    "Origin": "https://yuanbao.tencent.com",
+                    "Referer": self.CALLBACK_URL,
+                    "X-Source": "web",
+                },
+            ) as response:
+                content = bytearray()
+                async for chunk in response.aiter_bytes():
+                    if len(content) + len(chunk) > self.MAX_LOGIN_RESPONSE_BYTES:
+                        raise PlatformLoginError("微信登录服务响应超过安全限制。")
+                    content.extend(chunk)
+                response_content = bytes(content)
+                status_code = response.status_code
+        except PlatformLoginError:
+            raise
+        except httpx.HTTPError as exc:
+            raise PlatformLoginError(
+                "微信登录确认请求失败，请稍后重试。"
+            ) from exc
 
-            if status_code in {403, 429} or self._contains_risk_marker(content):
-                raise self._verification_error()
-            if status_code not in self._REDIRECT_STATUS_CODES:
-                if status_code >= 400:
-                    raise PlatformLoginError(
-                        "微信登录确认请求失败，请稍后重试。"
-                    )
-                return
-            if not location or len(location) > 2048:
-                raise PlatformLoginError("微信返回了无效的登录确认信息。")
-            current_url = urljoin(current_url, location)
-        raise PlatformLoginError("微信登录确认重定向次数超过安全限制。")
+        if status_code in self._REDIRECT_STATUS_CODES:
+            raise PlatformLoginError("微信登录服务返回了不安全的重定向。")
+        if status_code in {403, 429} or self._contains_risk_marker(response_content):
+            raise self._verification_error()
+        if status_code >= 400:
+            raise PlatformLoginError("微信登录确认请求失败，请稍后重试。")
+
+        try:
+            payload = json.loads(response_content.decode("utf-8-sig"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PlatformLoginError("微信返回了无效的登录确认信息。") from exc
+        if not isinstance(payload, Mapping):
+            raise PlatformLoginError("微信返回了无效的登录确认信息。")
+        data = payload.get("data")
+        credentials = data if isinstance(data, Mapping) else payload
+        user_id = self._safe_credential_value(credentials.get("userId"))
+        token = self._safe_credential_value(credentials.get("token"))
+        if not user_id or not token:
+            raise PlatformLoginError(
+                "微信登录成功，但响应中缺少有效的腾讯元宝登录凭据。"
+            )
+        return f"yb_user_id={user_id}; yb_token={token}"
 
     async def _read_limited_response(
         self,
@@ -334,6 +343,7 @@ class WeChatLoginProvider(PlatformLoginProvider):
         except ValueError:
             return "", ""
         for image_url in parser.image_urls:
+            image_url = urljoin(cls.OAUTH_URL, image_url)
             try:
                 parsed = urlsplit(image_url)
                 port = parsed.port
@@ -342,7 +352,7 @@ class WeChatLoginProvider(PlatformLoginProvider):
             path_match = re.fullmatch(r"/connect/qrcode/([^/]+)", parsed.path)
             if (
                 parsed.scheme != "https"
-                or parsed.hostname != cls.QR_IMAGE_HOST
+                or (parsed.hostname or "").lower() != cls.QR_IMAGE_HOST
                 or parsed.username is not None
                 or parsed.password is not None
                 or port not in {None, 443}
@@ -354,17 +364,14 @@ class WeChatLoginProvider(PlatformLoginProvider):
                 return image_url, uuid
         return "", ""
 
-    def _cookie_header(self) -> str:
-        cookies: dict[str, str] = {}
-        for cookie in self._client.cookies.jar:
-            domain = str(cookie.domain or "").lstrip(".").lower()
-            if domain != self.YUANBAO_HOST:
-                continue
-            if cookie.name in self.COOKIE_NAMES and cookie.value:
-                cookies[cookie.name] = cookie.value
-        return "; ".join(
-            f"{name}={cookies[name]}" for name in self.COOKIE_NAMES if name in cookies
-        )
+    @staticmethod
+    def _safe_credential_value(value: object) -> str:
+        text = str(value or "")
+        if not text or len(text) > 4096 or ";" in text:
+            return ""
+        if not all(character.isprintable() for character in text):
+            return ""
+        return text
 
     @classmethod
     def _contains_risk_marker(cls, content: bytes) -> bool:
@@ -376,21 +383,6 @@ class WeChatLoginProvider(PlatformLoginProvider):
         return PlatformLoginError(
             "微信登录触发了平台人机、设备验证或风控，"
             "当前私聊流程无法继续，请稍后重试或手工配置 Cookies。"
-        )
-
-    @classmethod
-    def _is_trusted_yuanbao_url(cls, url: str) -> bool:
-        try:
-            parsed = urlsplit(url)
-            port = parsed.port
-        except ValueError:
-            return False
-        return (
-            parsed.scheme == "https"
-            and parsed.hostname == cls.YUANBAO_HOST
-            and parsed.username is None
-            and parsed.password is None
-            and port in {None, 443}
         )
 
     @staticmethod

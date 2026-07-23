@@ -39,11 +39,17 @@ def test_schema_uses_platform_switches_without_legacy_settings():
     assert "enabled_platforms" not in schema
     assert "platform_switches_migrated" not in schema
 
+    cookie_group = schema["cookies"]
+    assert cookie_group["type"] == "object"
+    assert tuple(cookie_group["items"]) == COOKIE_KEYS
     for cookie_key in COOKIE_KEYS:
-        cookie_config = schema[cookie_key]
+        assert cookie_key not in schema
+        cookie_config = cookie_group["items"][cookie_key]
         assert cookie_config["type"] == "text"
         assert cookie_config["default"] == ""
-    assert tuple(schema)[-len(COOKIE_KEYS) :] == COOKIE_KEYS
+    assert cookie_group["items"]["wechat_yuanbao_cookies"]["description"] == (
+        "腾讯元宝 Cookies"
+    )
     assert schema["max_video_size_mb"]["default"] == 50
 
 

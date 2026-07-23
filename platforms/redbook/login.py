@@ -17,7 +17,7 @@ from ...core.authentication import (
     PlatformLoginProvider,
     QRLoginChallenge,
 )
-from ...core.http import request_timeout
+from ...core.http import cookie_config_value, parse_cookie_header, request_timeout
 from .signing import RedBookRequestSigner, XhshowRequestSigner
 
 
@@ -44,7 +44,7 @@ class RedBookLoginProvider(PlatformLoginProvider):
     MAX_RESPONSE_BYTES = 64 * 1024
     MAX_BOOTSTRAP_PREFIX_BYTES = 64 * 1024
     LOGIN_HOST_SUFFIXES = ("xiaohongshu.com",)
-    COOKIE_NAMES = ("web_session",)
+    COOKIE_NAMES = ("a1", "web_session")
     RISK_CODES = frozenset({-13020, -13002, 461, 471})
     RISK_HTTP_STATUS_CODES = frozenset({412, 418, 429, 461, 471})
     USER_AGENT = (
@@ -73,6 +73,18 @@ class RedBookLoginProvider(PlatformLoginProvider):
         )
         self._signer = signer or XhshowRequestSigner()
         self._sessions: dict[str, _QRSession] = {}
+        configured_cookies = dict(
+            parse_cookie_header(cookie_config_value(config, self.cookie_config_key))
+        )
+        configured_a1 = configured_cookies.get("a1", "")
+        if not self._a1_cookie() and self._valid_cookie_value(configured_a1):
+            # 配置中的 a1 来自用户自己的官方浏览器会话，只绑定到小红书域。
+            self._client.cookies.set(
+                "a1",
+                configured_a1,
+                domain=".xiaohongshu.com",
+                path="/",
+            )
 
     async def create_qr_challenge(self) -> QRLoginChallenge:
         """创建二维码会话，并只把本地随机会话键交给公共编排层。"""
@@ -110,7 +122,7 @@ class RedBookLoginProvider(PlatformLoginProvider):
         )
 
     async def poll_qr_status(self, session_key: str) -> LoginPollResult:
-        """轮询二维码状态，成功后仅提取小红书域的 ``web_session``。"""
+        """轮询二维码状态，成功后提取小红书域的最小登录 Cookie。"""
         session = self._sessions.get(session_key)
         if session is None:
             raise PlatformLoginError("小红书登录会话无效，请重新发起登录。")
@@ -146,9 +158,7 @@ class RedBookLoginProvider(PlatformLoginProvider):
             cookie_header = self._cookie_header()
             self._sessions.pop(session_key, None)
             if not cookie_header:
-                raise PlatformLoginError(
-                    "小红书登录成功，但响应中缺少有效登录凭据。"
-                )
+                raise PlatformLoginError("小红书登录成功，但响应中缺少有效登录凭据。")
             return LoginPollResult(LoginPollState.SUCCESS, cookie_header)
         raise PlatformLoginError("小红书返回了无法识别的登录状态，请重新发起登录。")
 
@@ -172,9 +182,7 @@ class RedBookLoginProvider(PlatformLoginProvider):
                     location = response.headers.get("Location", "")
                     if self._is_verification_url(location):
                         raise self._verification_error()
-                    raise PlatformLoginError(
-                        "小红书登录初始化返回了不安全的重定向。"
-                    )
+                    raise PlatformLoginError("小红书登录初始化返回了不安全的重定向。")
                 if response.status_code in self.RISK_HTTP_STATUS_CODES:
                     raise self._verification_error()
                 response.raise_for_status()
@@ -191,14 +199,16 @@ class RedBookLoginProvider(PlatformLoginProvider):
         except PlatformLoginError:
             raise
         except httpx.HTTPError as exc:
-            raise PlatformLoginError(
-                "小红书登录初始化请求失败，请稍后重试。"
-            ) from exc
+            raise PlatformLoginError("小红书登录初始化请求失败，请稍后重试。") from exc
         if self._looks_like_verification_page(bytes(prefix)):
             raise self._verification_error()
         a1_value = self._a1_cookie()
         if not a1_value:
-            raise PlatformLoginError("小红书登录初始化失败，请稍后重试。")
+            raise PlatformLoginError(
+                "小红书二维码登录需要官网在真实浏览器环境设置的 a1，"
+                "当前私聊流程无法自动初始化；"
+                "请在小红书 Cookies 配置中保留 a1 后重试。"
+            )
         return a1_value
 
     async def _signed_payload(
@@ -240,9 +250,7 @@ class RedBookLoginProvider(PlatformLoginProvider):
         except PlatformLoginError:
             raise
         except (httpx.HTTPError, TypeError, ValueError) as exc:
-            raise PlatformLoginError(
-                "小红书登录服务请求失败，请稍后重试。"
-            ) from exc
+            raise PlatformLoginError("小红书登录服务请求失败，请稍后重试。") from exc
         if not isinstance(response, dict):
             raise PlatformLoginError("小红书登录服务返回了无效响应。")
         if self._requires_verification(response):
@@ -259,9 +267,7 @@ class RedBookLoginProvider(PlatformLoginProvider):
             if response.is_redirect:
                 if self._is_verification_url(response.headers.get("Location", "")):
                     raise self._verification_error()
-                raise PlatformLoginError(
-                    "小红书登录服务返回了不安全的重定向。"
-                )
+                raise PlatformLoginError("小红书登录服务返回了不安全的重定向。")
             if response.status_code in self.RISK_HTTP_STATUS_CODES:
                 raise self._verification_error()
             response.raise_for_status()
@@ -284,6 +290,7 @@ class RedBookLoginProvider(PlatformLoginProvider):
         return ""
 
     def _cookie_header(self) -> str:
+        """返回后续重新登录所需的 ``a1`` 与账号 ``web_session``。"""
         values: dict[str, str] = {}
         for cookie in self._client.cookies.jar:
             domain = str(cookie.domain or "").lstrip(".").lower()
@@ -293,9 +300,9 @@ class RedBookLoginProvider(PlatformLoginProvider):
                 and self._valid_cookie_value(cookie.value)
             ):
                 values[cookie.name] = str(cookie.value)
-        return "; ".join(
-            f"{name}={values[name]}" for name in self.COOKIE_NAMES if name in values
-        )
+        if any(name not in values for name in self.COOKIE_NAMES):
+            return ""
+        return "; ".join(f"{name}={values[name]}" for name in self.COOKIE_NAMES)
 
     @classmethod
     def _validate_success_url(cls, data: dict) -> None:
@@ -361,8 +368,7 @@ class RedBookLoginProvider(PlatformLoginProvider):
         except ValueError:
             return False
         return any(
-            marker in path
-            for marker in ("/404/security-check", "/captcha", "/verify")
+            marker in path for marker in ("/404/security-check", "/captcha", "/verify")
         )
 
     @classmethod
@@ -391,8 +397,10 @@ class RedBookLoginProvider(PlatformLoginProvider):
     @staticmethod
     def _valid_cookie_value(value: object) -> bool:
         text = str(value or "")
-        return bool(text) and len(text) <= 4096 and not any(
-            character in text for character in ("\r", "\n", ";")
+        return (
+            bool(text)
+            and len(text) <= 4096
+            and not any(character in text for character in ("\r", "\n", ";"))
         )
 
     @classmethod

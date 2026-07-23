@@ -4,7 +4,7 @@ from urllib.parse import parse_qs, urlparse, urlsplit
 
 import httpx
 
-from ...core.http import build_cookies
+from ...core.http import build_cookies, cookie_config_value
 from ...core.media import mark_invalid_legacy_images
 from ...models import BaseParser, ParseContext, ParseResult
 from .music import is_qishui_track_url, parse_qishui_track_html
@@ -53,7 +53,7 @@ class DouyinParser(BaseParser):
             return ParseResult(platform=self.name, error="未找到大陆抖音链接。")
 
         cookies = build_cookies(
-            self.config.get("douyin_cookies", ""),
+            cookie_config_value(self.config, "douyin_cookies"),
             (".douyin.com", ".iesdouyin.com"),
         )
         async with httpx.AsyncClient(

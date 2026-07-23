@@ -6,12 +6,19 @@ from astrbot_multi_parser.core.authentication import (
 )
 from astrbot_multi_parser.platforms.douyin.login import DouyinLoginProvider
 
+CONFIGURED_TTWID = {"douyin_cookies": "ttwid=configured-device"}
+
 
 @pytest.mark.asyncio
 async def test_douyin_qr_login_creates_challenge_from_trusted_image_url():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "sso.douyin.com":
             assert request.url.params["need_logo"] == "true"
+            assert request.url.params["device_platform"] == "web_app"
+            assert request.headers["Origin"] == "https://www.douyin.com"
+            assert "application/json" in request.headers["Accept"]
+            assert "ttwid=configured-device" in request.headers["Cookie"]
+            assert "sessionid" not in request.headers["Cookie"]
             return httpx.Response(
                 200,
                 request=request,
@@ -31,8 +38,10 @@ async def test_douyin_qr_login_creates_challenge_from_trusted_image_url():
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        client.cookies.set("sessionid", "must-stay-on-douyin", domain=".douyin.com")
-        provider = DouyinLoginProvider({}, client=client)
+        provider = DouyinLoginProvider(
+            {"douyin_cookies": ("ttwid=configured-device; sessionid=must-not-reuse")},
+            client=client,
+        )
         challenge = await provider.create_qr_challenge()
 
     assert challenge.session_key == "one-time-token"
@@ -105,7 +114,7 @@ async def test_douyin_qr_login_rejects_untrusted_qr_url_without_leaking_token():
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        provider = DouyinLoginProvider({}, client=client)
+        provider = DouyinLoginProvider(CONFIGURED_TTWID, client=client)
         with pytest.raises(PlatformLoginError, match="无效的二维码") as exc_info:
             await provider.create_qr_challenge()
 
@@ -123,7 +132,7 @@ async def test_douyin_qr_login_rejects_oversized_response():
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        provider = DouyinLoginProvider({}, client=client)
+        provider = DouyinLoginProvider(CONFIGURED_TTWID, client=client)
         with pytest.raises(PlatformLoginError, match="超过安全限制"):
             await provider.create_qr_challenge()
 
@@ -139,7 +148,7 @@ async def test_douyin_qr_login_reports_platform_verification_page():
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        provider = DouyinLoginProvider({}, client=client)
+        provider = DouyinLoginProvider(CONFIGURED_TTWID, client=client)
         with pytest.raises(PlatformLoginError, match="人机或设备验证"):
             await provider.create_qr_challenge()
 
@@ -154,7 +163,7 @@ async def test_douyin_qr_login_reports_json_verification_without_leaking_ticket(
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        provider = DouyinLoginProvider({}, client=client)
+        provider = DouyinLoginProvider(CONFIGURED_TTWID, client=client)
         with pytest.raises(PlatformLoginError, match="人机或设备验证") as exc_info:
             await provider.create_qr_challenge()
 
@@ -188,7 +197,7 @@ async def test_douyin_qr_login_does_not_follow_qr_image_redirect():
         transport=httpx.MockTransport(handler),
         follow_redirects=True,
     ) as client:
-        provider = DouyinLoginProvider({}, client=client)
+        provider = DouyinLoginProvider(CONFIGURED_TTWID, client=client)
         with pytest.raises(PlatformLoginError, match="不安全的重定向"):
             await provider.create_qr_challenge()
 
@@ -204,12 +213,156 @@ async def test_douyin_qr_login_hides_network_error_details():
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        provider = DouyinLoginProvider({}, client=client)
+        provider = DouyinLoginProvider(CONFIGURED_TTWID, client=client)
         with pytest.raises(PlatformLoginError, match="请求失败") as exc_info:
             await provider.create_qr_challenge()
 
     assert "network-secret" not in str(exc_info.value)
     assert "example.com" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_douyin_qr_login_bootstraps_ttwid_through_trusted_callback():
+    requested_paths = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_paths.append((request.url.host, request.url.path))
+        if request.url.host == "ttwid.bytedance.com":
+            assert request.method == "POST"
+            assert request.headers["Origin"] == "https://www.douyin.com"
+            return httpx.Response(
+                200,
+                request=request,
+                json={"redirect_url": "https://www.douyin.com/ttwid/callback"},
+            )
+        if request.url.path == "/ttwid/callback":
+            return httpx.Response(
+                302,
+                request=request,
+                headers=[
+                    ("Location", "/ttwid/final"),
+                    (
+                        "Set-Cookie",
+                        "ttwid=bootstrapped-device; Domain=.douyin.com; Path=/",
+                    ),
+                ],
+            )
+        if request.url.path == "/ttwid/final":
+            return httpx.Response(
+                200,
+                request=request,
+                headers={"Content-Type": "text/html; charset=utf-8"},
+                text="<html><title>Douyin</title></html>",
+            )
+        if request.url.host == "sso.douyin.com":
+            assert "ttwid=bootstrapped-device" in request.headers["Cookie"]
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "data": {
+                        "qrcode": "https://p3-passport.byteimg.com/login.jpg",
+                        "token": "one-time-token",
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"Content-Type": "image/jpeg"},
+            content=b"\xff\xd8\xff\xd9",
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = DouyinLoginProvider({}, client=client)
+        challenge = await provider.create_qr_challenge()
+
+    assert challenge.session_key == "one-time-token"
+    assert requested_paths[:4] == [
+        ("ttwid.bytedance.com", "/ttwid/union/register/"),
+        ("www.douyin.com", "/ttwid/callback"),
+        ("www.douyin.com", "/ttwid/final"),
+        ("sso.douyin.com", "/get_qrcode/"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_douyin_qr_login_rejects_untrusted_ttwid_callback():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            json={"redirect_url": "https://example.com/collect"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = DouyinLoginProvider({}, client=client)
+        with pytest.raises(PlatformLoginError, match="不安全的回调地址") as exc_info:
+            await provider.create_qr_challenge()
+
+    assert "example.com" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_douyin_qr_login_rejects_untrusted_ttwid_callback_redirect():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "ttwid.bytedance.com":
+            return httpx.Response(
+                200,
+                request=request,
+                json={"redirect_url": "https://www.douyin.com/ttwid/callback"},
+            )
+        return httpx.Response(
+            302,
+            request=request,
+            headers={"Location": "https://example.com/collect"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = DouyinLoginProvider({}, client=client)
+        with pytest.raises(PlatformLoginError, match="不安全的重定向") as exc_info:
+            await provider.create_qr_challenge()
+
+    assert "example.com" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_douyin_qr_login_rejects_oversized_ttwid_callback_response():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "ttwid.bytedance.com":
+            return httpx.Response(
+                200,
+                request=request,
+                json={"redirect_url": "https://www.douyin.com/ttwid/callback"},
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            content=b"x" * (DouyinLoginProvider.MAX_RESPONSE_BYTES + 1),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = DouyinLoginProvider({}, client=client)
+        with pytest.raises(PlatformLoginError, match="超过安全限制"):
+            await provider.create_qr_challenge()
+
+
+@pytest.mark.asyncio
+async def test_douyin_qr_login_reports_generic_html_as_invalid_response():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"Content-Type": "text/html; charset=utf-8"},
+            text="<html><title>Temporary service page</title></html>",
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = DouyinLoginProvider(CONFIGURED_TTWID, client=client)
+        with pytest.raises(PlatformLoginError, match="无效响应") as exc_info:
+            await provider.create_qr_challenge()
+
+    assert "人机或设备验证" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio

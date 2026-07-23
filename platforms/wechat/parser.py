@@ -3,9 +3,10 @@
 import re
 
 import httpx
+from httpx import Cookies
 
 from ...core.contracts import ParseContext, ParseResult
-from ...core.http import build_cookies, parse_cookie_header
+from ...core.http import cookie_config_value, parse_cookie_header
 from ...core.parser import BaseParser
 from .article import parse_article_html
 from .channels import resolve_channels_share
@@ -74,8 +75,16 @@ class WeChatParser(BaseParser):
             return await self.materialize_images(result, client, url)
 
     async def _parse_channels(self, url: str) -> ParseResult:
-        cookie_value = self.config.get(self.cookie_config_key, "")
-        cookies = build_cookies(cookie_value, ["yuanbao.tencent.com"])
+        cookie_value = cookie_config_value(self.config, self.cookie_config_key)
+        configured_values = dict(parse_cookie_header(cookie_value))
+        user_id = configured_values.pop("yb_user_id", "")
+        token = configured_values.pop("yb_token", "")
+        yuanbao_credentials = (user_id, token) if user_id and token else None
+        # 旧版手工 Cookie 继续绑定到元宝域；新令牌只按请求映射为认证头，
+        # 不作为 Cookie 发送，也不会随客户端访问视频号域。
+        cookies = Cookies()
+        for name, value in configured_values.items():
+            cookies.set(name, value, domain="yuanbao.tencent.com", path="/")
         async with httpx.AsyncClient(
             timeout=self.request_timeout,
             cookies=cookies,
@@ -83,7 +92,10 @@ class WeChatParser(BaseParser):
             result = await resolve_channels_share(
                 client,
                 url,
-                cookies_configured=bool(parse_cookie_header(cookie_value)),
+                credentials_configured=(
+                    yuanbao_credentials is not None or bool(configured_values)
+                ),
+                yuanbao_credentials=yuanbao_credentials,
             )
             return await self.materialize_images(
                 result,

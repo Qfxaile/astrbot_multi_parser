@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 from astrbot_multi_parser.core.authentication import (
@@ -21,7 +23,7 @@ def qr_page_response(request: httpx.Request) -> httpx.Response | None:
             headers={"Content-Type": "text/html; charset=utf-8"},
             text=(
                 '<html><img class="js_qrcode_img web_qrcode_img" '
-                f'src="{QR_IMAGE_URL}"></html>'
+                f'src="/connect/qrcode/{QR_UUID}"></html>'
             ),
         )
     if request.url.path == f"/connect/qrcode/{QR_UUID}":
@@ -127,7 +129,7 @@ async def test_wechat_qr_login_passes_scanned_status_to_next_long_poll():
 
 
 @pytest.mark.asyncio
-async def test_wechat_qr_login_collects_only_minimum_yuanbao_cookies():
+async def test_wechat_qr_login_exchanges_code_for_minimum_yuanbao_credentials():
     requested_hosts = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -139,37 +141,31 @@ async def test_wechat_qr_login_collects_only_minimum_yuanbao_cookies():
             assert "Cookie" not in request.headers
             return poll_response(request, 405, "wechat-auth-code")
         assert request.url.host == "yuanbao.tencent.com"
-        if request.url.path == "/scan":
-            assert request.url.params["code"] == "wechat-auth-code"
-            assert request.url.params["state"] == "wechat_login"
-            return httpx.Response(
-                302,
-                request=request,
-                headers=[
-                    ("Location", "/chat/naQivTmsDa"),
-                    (
-                        "Set-Cookie",
-                        "hy_user=user-secret; Domain=.yuanbao.tencent.com; Path=/",
-                    ),
-                    (
-                        "Set-Cookie",
-                        "hy_token=token-secret; Domain=.yuanbao.tencent.com; Path=/",
-                    ),
-                    (
-                        "Set-Cookie",
-                        "hy_source=web; Domain=.yuanbao.tencent.com; Path=/",
-                    ),
-                    (
-                        "Set-Cookie",
-                        "not_needed=ignore; Domain=.yuanbao.tencent.com; Path=/",
-                    ),
-                ],
-            )
-        return httpx.Response(200, request=request, text="ok")
+        assert request.url.path == "/api/joint/login"
+        assert request.method == "POST"
+        assert not request.url.query
+        assert request.headers["Origin"] == "https://yuanbao.tencent.com"
+        assert request.headers["X-Source"] == "web"
+        assert json.loads(request.content) == {
+            "type": "wx",
+            "jsCode": "wechat-auth-code",
+            "appid": "wx12b75947931a04ec",
+            "apiFeature": "team",
+        }
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "code": 0,
+                "data": {
+                    "userId": "user-secret",
+                    "token": "token-secret",
+                    "ignored": "must-not-save",
+                },
+            },
+        )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        client.cookies.set("hy_user", "foreign-user", domain="example.com")
-        client.cookies.set("hy_token", "foreign-token", domain="example.com")
         provider = WeChatLoginProvider({}, client=client)
         challenge = await provider.create_qr_challenge()
         result = await provider.poll_qr_status(challenge.session_key)
@@ -179,13 +175,10 @@ async def test_wechat_qr_login_collects_only_minimum_yuanbao_cookies():
         "open.weixin.qq.com",
         "long.open.weixin.qq.com",
         "yuanbao.tencent.com",
-        "yuanbao.tencent.com",
     ]
     assert result.state == LoginPollState.SUCCESS
-    assert result.cookie_header == "hy_user=user-secret; hy_token=token-secret"
-    assert "hy_source" not in result.cookie_header
-    assert "not_needed" not in result.cookie_header
-    assert "foreign" not in result.cookie_header
+    assert result.cookie_header == "yb_user_id=user-secret; yb_token=token-secret"
+    assert "ignored" not in result.cookie_header
 
 
 @pytest.mark.asyncio
@@ -215,7 +208,7 @@ async def test_wechat_qr_login_rejects_untrusted_qr_url_without_requesting_it():
 
 
 @pytest.mark.asyncio
-async def test_wechat_qr_login_rejects_untrusted_success_redirect():
+async def test_wechat_qr_login_rejects_login_api_redirect():
     requested_hosts = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -234,12 +227,36 @@ async def test_wechat_qr_login_rejects_untrusted_success_redirect():
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         provider = WeChatLoginProvider({}, client=client)
         challenge = await provider.create_qr_challenge()
-        with pytest.raises(PlatformLoginError, match="无效的登录确认") as exc_info:
+        with pytest.raises(PlatformLoginError, match="不安全的重定向") as exc_info:
             await provider.poll_qr_status(challenge.session_key)
 
     assert "example.com" not in requested_hosts
     assert "secret-auth-code" not in str(exc_info.value)
     assert "example.com" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_wechat_qr_login_rejects_incomplete_yuanbao_credentials():
+    def handler(request: httpx.Request) -> httpx.Response:
+        response = qr_page_response(request)
+        if response is not None:
+            return response
+        if request.url.host == "long.open.weixin.qq.com":
+            return poll_response(request, 405, "secret-auth-code")
+        return httpx.Response(
+            200,
+            request=request,
+            json={"code": 0, "data": {"userId": "user-secret"}},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = WeChatLoginProvider({}, client=client)
+        challenge = await provider.create_qr_challenge()
+        with pytest.raises(PlatformLoginError, match="缺少有效") as exc_info:
+            await provider.poll_qr_status(challenge.session_key)
+
+    assert "secret-auth-code" not in str(exc_info.value)
+    assert "user-secret" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio

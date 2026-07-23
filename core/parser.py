@@ -9,6 +9,7 @@ from .http import (
     AUTH_FAILURE_STATUS_CODES,
     CookieAccessError,
     build_cookie_access_error,
+    cookie_config_value,
     raise_for_cookie_access,
     request_timeout,
 )
@@ -42,7 +43,7 @@ class BaseParser:
         """根据当前平台 Cookie 配置生成不泄漏凭据的用户提示。"""
         return build_cookie_access_error(
             self.display_name,
-            self.config.get(self.cookie_config_key, ""),
+            cookie_config_value(self.config, self.cookie_config_key),
         )
 
     def raise_for_response_status(self, response: httpx.Response) -> None:
@@ -54,7 +55,7 @@ class BaseParser:
         raise_for_cookie_access(
             response,
             platform=self.display_name,
-            cookie_value=self.config.get(self.cookie_config_key, ""),
+            cookie_value=cookie_config_value(self.config, self.cookie_config_key),
             status_codes=self.cookie_failure_status_codes,
         )
         response.raise_for_status()

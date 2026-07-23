@@ -97,7 +97,7 @@ class TiebaLoginProvider(PlatformLoginProvider):
 
         session_key = str(payload.get("sign") or "")
         image_value = str(payload.get("imgurl") or "")
-        image_url = urljoin(self.QR_GENERATE_URL, image_value)
+        image_url = self._normalize_qr_image_url(image_value)
         if (
             self._SESSION_KEY_PATTERN.fullmatch(session_key) is None
             or len(image_url) > 2048
@@ -374,6 +374,22 @@ class TiebaLoginProvider(PlatformLoginProvider):
     @classmethod
     def _callback_name(cls) -> str:
         return f"tangram_guid_{cls._timestamp_ms()}"
+
+    @classmethod
+    def _normalize_qr_image_url(cls, value: str) -> str:
+        """兼容百度返回的绝对、协议相对和省略协议的官方图片地址。"""
+        value = value.strip()
+        if value.startswith("//"):
+            return f"https:{value}"
+        try:
+            if urlsplit(value).scheme:
+                return value
+        except ValueError:
+            return ""
+        host_path = value.lstrip("/")
+        if host_path.lower().startswith("passport.baidu.com/"):
+            return f"https://{host_path}"
+        return urljoin(cls.QR_GENERATE_URL, value)
 
     @staticmethod
     def _verification_error() -> PlatformLoginError:

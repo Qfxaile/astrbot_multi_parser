@@ -122,6 +122,41 @@ async def test_redbook_qr_create_bootstraps_official_a1_cookie():
 
 
 @pytest.mark.asyncio
+async def test_redbook_qr_create_reuses_configured_official_a1_cookie():
+    requested_hosts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_hosts.append(request.url.host)
+        return httpx.Response(200, json=qr_create_response(), request=request)
+
+    signer = FakeSigner()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = RedBookLoginProvider(
+            {"redbook_cookies": "a1=official-config-cookie"},
+            client=client,
+            signer=signer,
+        )
+        await provider.create_qr_challenge()
+
+    assert requested_hosts == ["edith.xiaohongshu.com"]
+    assert signer.calls[0][2] == "official-config-cookie"
+
+
+@pytest.mark.asyncio
+async def test_redbook_qr_create_explains_missing_official_a1_cookie():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>official page</html>", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = RedBookLoginProvider({}, client=client, signer=FakeSigner())
+        with pytest.raises(
+            PlatformLoginError,
+            match="真实浏览器环境设置的 a1",
+        ):
+            await provider.create_qr_challenge()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("status", "expected_state"),
     [
@@ -152,7 +187,7 @@ async def test_redbook_qr_poll_maps_known_states(status, expected_state):
 
 
 @pytest.mark.asyncio
-async def test_redbook_qr_success_saves_only_whitelisted_platform_cookie():
+async def test_redbook_qr_success_saves_only_whitelisted_platform_cookies():
     responses = [
         httpx.Response(200, json=qr_create_response()),
         httpx.Response(
@@ -183,15 +218,51 @@ async def test_redbook_qr_success_saves_only_whitelisted_platform_cookie():
             "foreign-secret",
             domain="example.com",
         )
+        client.cookies.set("a1", "foreign-a1", domain="example.com")
+        client.cookies.set(
+            "web_session",
+            "invalid;session",
+            domain="invalid.xiaohongshu.com",
+        )
+        client.cookies.set(
+            "a1",
+            "invalid;a1",
+            domain="invalid.xiaohongshu.com",
+        )
         provider = RedBookLoginProvider({}, client=client, signer=FakeSigner())
         challenge = await provider.create_qr_challenge()
 
         result = await provider.poll_qr_status(challenge.session_key)
 
     assert result.state == LoginPollState.SUCCESS
-    assert result.cookie_header == "web_session=session-secret"
+    assert result.cookie_header == (
+        "a1=official-anonymous-cookie; web_session=session-secret"
+    )
     assert "gid" not in result.cookie_header
     assert "foreign-secret" not in result.cookie_header
+    assert "foreign-a1" not in result.cookie_header
+    assert "invalid" not in result.cookie_header
+
+
+@pytest.mark.asyncio
+async def test_redbook_qr_success_requires_web_session_in_addition_to_a1():
+    responses = [
+        httpx.Response(200, json=qr_create_response()),
+        httpx.Response(200, json={"code": 0, "data": {"code_status": 2}}),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        response = responses.pop(0)
+        response.request = request
+        return response
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        set_a1_cookie(client)
+        provider = RedBookLoginProvider({}, client=client, signer=FakeSigner())
+        challenge = await provider.create_qr_challenge()
+
+        with pytest.raises(PlatformLoginError, match="缺少有效登录凭据"):
+            await provider.poll_qr_status(challenge.session_key)
 
 
 @pytest.mark.asyncio
@@ -202,8 +273,7 @@ async def test_redbook_qr_success_rejects_untrusted_confirmation_url():
             200,
             headers={
                 "Set-Cookie": (
-                    "web_session=session-secret; "
-                    "Domain=.xiaohongshu.com; Path=/"
+                    "web_session=session-secret; Domain=.xiaohongshu.com; Path=/"
                 )
             },
             json={
@@ -331,7 +401,9 @@ async def test_redbook_qr_stops_on_verification_response(content_type, body):
         set_a1_cookie(client)
         provider = RedBookLoginProvider({}, client=client, signer=FakeSigner())
 
-        with pytest.raises(PlatformLoginError, match="人机、设备验证或风控") as exc_info:
+        with pytest.raises(
+            PlatformLoginError, match="人机、设备验证或风控"
+        ) as exc_info:
             await provider.create_qr_challenge()
 
     assert "secret-ticket" not in str(exc_info.value)

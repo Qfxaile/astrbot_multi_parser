@@ -39,20 +39,22 @@ async def resolve_channels_share(
     client: httpx.AsyncClient,
     share_url: str,
     *,
-    cookies_configured: bool,
+    credentials_configured: bool,
+    yuanbao_credentials: tuple[str, str] | None = None,
 ) -> ParseResult:
     """解析视频号分享链接并返回作品信息与可信视频直链。
 
     短链接先使用用户自己的腾讯元宝登录态换取 ``token`` 和 ``eid``；
-    已携带这两个参数的浏览器长链可直接请求视频号预览接口。Cookie
-    只由调用方绑定到元宝域，不会随预览或媒体请求发送。
+    已携带这两个参数的浏览器长链可直接请求视频号预览接口。当前令牌
+    只映射到元宝请求的认证头，兼容 Cookie 也仅由调用方绑定到元宝域。
     """
     token, export_id = extract_token_and_export_id(share_url)
     if not token or not export_id:
         token, export_id = await _exchange_share_url(
             client,
             share_url,
-            cookies_configured=cookies_configured,
+            credentials_configured=credentials_configured,
+            yuanbao_credentials=yuanbao_credentials,
         )
     payload = await _get_feed_info(client, token, export_id)
     return parse_channels_payload(payload)
@@ -62,11 +64,16 @@ async def _exchange_share_url(
     client: httpx.AsyncClient,
     share_url: str,
     *,
-    cookies_configured: bool,
+    credentials_configured: bool,
+    yuanbao_credentials: tuple[str, str] | None,
 ) -> tuple[str, str]:
-    if not cookies_configured:
+    if not credentials_configured:
         raise CookieAccessError("微信视频号", configured=False)
 
+    authentication_headers = {}
+    if yuanbao_credentials is not None:
+        user_id, token = yuanbao_credentials
+        authentication_headers = {"X-ID": user_id, "X-Token": token}
     response = await client.post(
         YUANBAO_PARSE_URL,
         json={"type": "video_channel_url", "url": share_url, "scene": 1},
@@ -80,6 +87,7 @@ async def _exchange_share_url(
             "X-Platform": "mac",
             "X-Requested-With": "XMLHttpRequest",
             "X-Source": "web",
+            **authentication_headers,
         },
     )
     if response.status_code in {401, 403}:

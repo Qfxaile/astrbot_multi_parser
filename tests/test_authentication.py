@@ -6,6 +6,7 @@ from astrbot.api.message_components import Image, Plain
 from astrbot_multi_parser.core.authentication import (
     LoginPollResult,
     LoginPollState,
+    PlatformLoginError,
     PlatformLoginProvider,
     QRLoginChallenge,
 )
@@ -61,8 +62,46 @@ class FakeWeiboLoginProvider(FakeLoginProvider):
 
 
 @pytest.mark.asyncio
+async def test_login_formats_platform_errors_consistently():
+    class FailedProvider(FakeLoginProvider):
+        display_name = "抖音"
+        cookie_config_key = "douyin_cookies"
+
+        async def create_qr_challenge(self):
+            raise PlatformLoginError("抖音登录触发了平台人机或设备验证。")
+
+    provider = FailedProvider([])
+    service = AuthenticationService(
+        {},
+        provider_factories={"抖音": lambda: provider},
+    )
+
+    message = await service.login(FakeEvent(), "抖音")
+
+    assert message == ("登录失败｜平台：抖音｜原因：触发了平台人机或设备验证。")
+    assert provider.closed is True
+
+
+@pytest.mark.asyncio
+async def test_login_formats_expired_qr_consistently():
+    provider = FakeLoginProvider([LoginPollResult(LoginPollState.EXPIRED)])
+    service = AuthenticationService(
+        {},
+        provider_factories={"B站": lambda: provider},
+    )
+
+    message = await service.login(FakeEvent(), "B站")
+
+    assert message == (
+        "登录失败｜平台：B站｜原因：二维码已过期，请重新发起登录。"
+        "该平台短信登录需要额外人机验证，当前私聊流程暂不支持。"
+    )
+    assert provider.closed is True
+
+
+@pytest.mark.asyncio
 async def test_login_sends_qr_and_saves_cookie_without_echoing_secret():
-    config = SavingConfig()
+    config = SavingConfig(cookies={"bilibili_cookies": ""})
     provider = FakeLoginProvider(
         [
             LoginPollResult(LoginPollState.SCANNED),
@@ -82,7 +121,7 @@ async def test_login_sends_qr_and_saves_cookie_without_echoing_secret():
     message = await service.login(event, "B站")
 
     assert message == "B站登录成功，Cookies 已保存。"
-    assert config["bilibili_cookies"].startswith("SESSDATA=")
+    assert config["cookies"]["bilibili_cookies"].startswith("SESSDATA=")
     assert config.save_calls == 1
     assert provider.closed is True
     assert isinstance(event.sent[0][0], Plain)
@@ -128,13 +167,15 @@ async def test_cancel_only_stops_login_from_same_private_session():
 
 @pytest.mark.asyncio
 async def test_logout_clears_cookie_and_saves_config():
-    config = SavingConfig(bilibili_cookies="SESSDATA=session-secret")
+    config = SavingConfig(
+        cookies={"bilibili_cookies": "SESSDATA=session-secret"}
+    )
     service = AuthenticationService(config, provider_factories={"B站": lambda: None})
 
     message = await service.logout("B站")
 
     assert message == "B站已退出登录，Cookies 已清除。"
-    assert config["bilibili_cookies"] == ""
+    assert config["cookies"]["bilibili_cookies"] == ""
     assert config.save_calls == 1
 
 
@@ -335,7 +376,7 @@ async def test_wechat_login_restores_cookie_when_save_fails_without_leaking_it()
 
     message = await service.login(FakeEvent(), "微信")
 
-    assert message == "Cookies 保存失败，原配置未被修改。"
+    assert message == ("登录失败｜平台：微信｜原因：Cookies 保存失败，原配置未被修改。")
     assert config["wechat_yuanbao_cookies"] == original_cookie
     assert config.save_calls == 1
     assert provider.closed is True
@@ -396,7 +437,7 @@ async def test_tieba_login_restores_cookie_when_save_fails():
 
     message = await service.login(FakeEvent(), "贴吧")
 
-    assert message == "Cookies 保存失败，原配置未被修改。"
+    assert message == ("登录失败｜平台：贴吧｜原因：Cookies 保存失败，原配置未被修改。")
     assert config["tieba_cookies"] == "BDUSS=previous-secret"
     assert config.save_calls == 1
     assert provider.closed is True
@@ -460,10 +501,9 @@ async def test_tieba_close_releases_active_login_on_plugin_unload():
 
 
 @pytest.mark.asyncio
-async def test_xiaoheihe_login_uses_wechat_scanner_label_and_saves_cookie():
+async def test_xiaoheihe_login_uses_native_scanner_label_and_saves_cookie():
     class XiaoheiheProvider(FakeLoginProvider):
         display_name = "小黑盒"
-        qr_scanner_name = "微信"
         cookie_config_key = "xiaoheihe_cookies"
 
     config = SavingConfig()
@@ -486,7 +526,7 @@ async def test_xiaoheihe_login_uses_wechat_scanner_label_and_saves_cookie():
 
     assert message == "小黑盒登录成功，Cookies 已保存。"
     assert config["xiaoheihe_cookies"].startswith("pkey=")
-    assert event.sent[0][0].text.startswith("请使用微信客户端扫描二维码")
+    assert event.sent[0][0].text.startswith("请使用小黑盒客户端扫描二维码")
     visible_text = "".join(
         component.text
         for chain in event.sent
@@ -573,7 +613,9 @@ async def test_xiaoheihe_login_restores_cookie_when_save_fails():
 
     message = await service.login(FakeEvent(), "小黑盒")
 
-    assert message == "Cookies 保存失败，原配置未被修改。"
+    assert message == (
+        "登录失败｜平台：小黑盒｜原因：Cookies 保存失败，原配置未被修改。"
+    )
     assert config["xiaoheihe_cookies"] == original_cookie
     assert provider.closed is True
 
@@ -626,14 +668,16 @@ async def test_close_cleans_xiaoheihe_login_session():
 def test_default_authentication_service_supports_all_login_providers():
     service = AuthenticationService(
         {
-            "bilibili_cookies": "",
-            "douyin_cookies": "",
-            "redbook_cookies": "",
-            "tieba_cookies": "",
-            "weibo_cookies": "",
-            "wechat_yuanbao_cookies": "",
-            "xiaoheihe_cookies": "",
-            "zhihu_cookies": "",
+            "cookies": {
+                "bilibili_cookies": "",
+                "douyin_cookies": "",
+                "redbook_cookies": "",
+                "tieba_cookies": "",
+                "weibo_cookies": "",
+                "wechat_yuanbao_cookies": "",
+                "xiaoheihe_cookies": "",
+                "zhihu_cookies": "",
+            }
         }
     )
 
@@ -658,9 +702,7 @@ def test_default_authentication_service_supports_all_login_providers():
     assert "暂不支持“tieba”" in service._unsupported_platform_message("tieba")
     assert "暂不支持“weibo”" in service._unsupported_platform_message("weibo")
     assert "暂不支持“wechat”" in service._unsupported_platform_message("wechat")
-    assert "暂不支持“小黑盒登录”" in service._unsupported_platform_message(
-        "小黑盒登录"
-    )
+    assert "暂不支持“小黑盒登录”" in service._unsupported_platform_message("小黑盒登录")
 
 
 @pytest.mark.asyncio
@@ -716,7 +758,7 @@ async def test_zhihu_login_restores_cookie_when_save_fails():
 
     message = await service.login(FakeEvent(), "知乎")
 
-    assert message == "Cookies 保存失败，原配置未被修改。"
+    assert message == ("登录失败｜平台：知乎｜原因：Cookies 保存失败，原配置未被修改。")
     assert config["zhihu_cookies"] == "z_c0=previous-secret"
     assert config.save_calls == 1
     assert provider.closed is True
@@ -830,7 +872,7 @@ async def test_weibo_login_restores_cookie_when_save_fails():
 
     message = await service.login(FakeEvent(), "微博")
 
-    assert message == "Cookies 保存失败，原配置未被修改。"
+    assert message == ("登录失败｜平台：微博｜原因：Cookies 保存失败，原配置未被修改。")
     assert config["weibo_cookies"] == "SUB=original-secret"
     assert provider.closed is True
 
@@ -863,7 +905,9 @@ async def test_redbook_login_restores_cookie_when_save_fails():
 
     message = await service.login(FakeEvent(), "小红书")
 
-    assert message == "Cookies 保存失败，原配置未被修改。"
+    assert message == (
+        "登录失败｜平台：小红书｜原因：Cookies 保存失败，原配置未被修改。"
+    )
     assert config["redbook_cookies"] == "web_session=previous-session"
     assert config.save_calls == 1
     assert provider.closed is True

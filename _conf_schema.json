@@ -108,52 +108,59 @@
     "default": true,
     "hint": "解析成功后给原消息添加表情回应，仅 OneBot v11 适配器可用。"
   },
-  "bilibili_cookies": {
-    "description": "B站 Cookies",
-    "type": "text",
-    "default": "",
-    "hint": "选填。用于 B站 页面和接口请求，可提高登录态或风控场景下的解析成功率。"
-  },
-  "douyin_cookies": {
-    "description": "抖音 Cookies",
-    "type": "text",
-    "default": "",
-    "hint": "选填。未提供 ttwid 时，插件会尝试注册匿名会话。"
-  },
-  "redbook_cookies": {
-    "description": "小红书 Cookies",
-    "type": "text",
-    "default": "",
-    "hint": "选填。部分内容配置 Cookies 后更容易获得可用或无水印资源。"
-  },
-  "tieba_cookies": {
-    "description": "贴吧 Cookies",
-    "type": "text",
-    "default": "",
-    "hint": "选填。用于贴吧帖子页面请求，可降低登录态或安全验证导致的解析失败。"
-  },
-  "weibo_cookies": {
-    "description": "微博 Cookies",
-    "type": "text",
-    "default": "",
-    "hint": "选填。仅用于需要登录态的微博页面请求。"
-  },
-  "wechat_yuanbao_cookies": {
-    "description": "腾讯元宝 Cookies",
-    "type": "text",
-    "default": "",
-    "hint": "解析视频号短链时必填。登录 yuanbao.tencent.com 后复制 Cookies；仅发送到腾讯元宝域。"
-  },
-  "xiaoheihe_cookies": {
-    "description": "小黑盒 Cookies",
-    "type": "text",
-    "default": "",
-    "hint": "选填。用于小黑盒社区接口请求。"
-  },
-  "zhihu_cookies": {
-    "description": "知乎 Cookies",
-    "type": "text",
-    "default": "",
-    "hint": "选填。用于知乎页面和接口请求。"
+  "cookies": {
+    "description": "Cookies 配置",
+    "type": "object",
+    "hint": "按平台填写 Cookies。Cookies 属于敏感信息，请勿写入日志或公开内容。",
+    "items": {
+      "bilibili_cookies": {
+        "description": "B站 Cookies",
+        "type": "text",
+        "default": "",
+        "hint": "选填。用于 B站页面和接口请求，可提高登录态或风控场景下的解析成功率。"
+      },
+      "douyin_cookies": {
+        "description": "抖音 Cookies",
+        "type": "text",
+        "default": "",
+        "hint": "选填。用于抖音内容解析；二维码登录入口已保留，但获取 Cookies 暂未实现，当前会登录失败，请手动填写。"
+      },
+      "redbook_cookies": {
+        "description": "小红书 Cookies",
+        "type": "text",
+        "default": "",
+        "hint": "选填。可提高部分内容或无水印资源的可用性；二维码登录入口已保留，但获取 Cookies 暂未实现，当前会登录失败，请手动填写。"
+      },
+      "tieba_cookies": {
+        "description": "贴吧 Cookies",
+        "type": "text",
+        "default": "",
+        "hint": "选填。用于贴吧帖子页面请求，可降低登录态或安全验证导致的解析失败。"
+      },
+      "weibo_cookies": {
+        "description": "微博 Cookies",
+        "type": "text",
+        "default": "",
+        "hint": "选填。仅用于需要登录态的微博页面请求。"
+      },
+      "wechat_yuanbao_cookies": {
+        "description": "腾讯元宝 Cookies",
+        "type": "text",
+        "default": "",
+        "hint": "解析视频号短链时必填。扫码登录会保存 yb_user_id、yb_token，并仅作为腾讯元宝请求认证头发送。"
+      },
+      "xiaoheihe_cookies": {
+        "description": "小黑盒 Cookies",
+        "type": "text",
+        "default": "",
+        "hint": "选填。用于小黑盒社区接口请求。"
+      },
+      "zhihu_cookies": {
+        "description": "知乎 Cookies",
+        "type": "text",
+        "default": "",
+        "hint": "选填。用于知乎页面和接口请求；二维码登录入口已保留，但获取 Cookies 暂未实现，当前会登录失败，请手动填写。"
+      }
+    }
   }
 }

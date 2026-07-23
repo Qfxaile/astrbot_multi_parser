@@ -1,10 +1,11 @@
 """提供 HTTP 配置、Cookie 构造和鉴权失败识别能力。"""
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Mapping, MutableMapping, Sequence
 
 from httpx import Cookies, Response
 
 AUTH_FAILURE_STATUS_CODES = frozenset({401, 403})
+COOKIE_GROUP_KEY = "cookies"
 
 
 class CookieAccessError(ValueError):
@@ -35,6 +36,25 @@ def parse_cookie_header(value: object) -> list[tuple[str, str]]:
         if name:
             pairs.append((name, content))
     return pairs
+
+
+def cookie_config_value(config: Mapping[str, object], key: str) -> object:
+    """读取 Cookies 分组中的配置。"""
+    grouped = config.get(COOKIE_GROUP_KEY)
+    if isinstance(grouped, Mapping):
+        return grouped.get(key, "")
+    return config.get(key, "")
+
+
+def set_cookie_config_value(
+    config: MutableMapping[str, object], key: str, value: str
+) -> None:
+    """写入 Cookies 分组；普通测试映射没有分组时写入顶层。"""
+    grouped = config.get(COOKIE_GROUP_KEY)
+    if isinstance(grouped, MutableMapping):
+        grouped[key] = value
+    else:
+        config[key] = value
 
 
 def build_cookies(value: object, domains: Sequence[str]) -> Cookies:

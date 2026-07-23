@@ -4,7 +4,7 @@ from urllib.parse import quote, urlparse, urlsplit, urlunsplit
 
 import httpx
 
-from ...core.http import build_cookies
+from ...core.http import build_cookies, cookie_config_value
 from ...core.media import mark_invalid_legacy_images
 from ...models import BaseParser, ParseContext, ParseResult
 
@@ -52,7 +52,8 @@ class RedBookParser(BaseParser):
             return ParseResult(platform=self.name, error="未找到小红书链接。")
 
         cookies = build_cookies(
-            self.config.get("redbook_cookies", ""), (".xiaohongshu.com",)
+            cookie_config_value(self.config, "redbook_cookies"),
+            (".xiaohongshu.com",),
         )
 
         async with httpx.AsyncClient(

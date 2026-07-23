@@ -7,7 +7,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from ...core.http import parse_cookie_header
+from ...core.http import cookie_config_value, parse_cookie_header
 from ...models import BaseParser, OrderedContent, ParseContext, ParseResult
 
 
@@ -264,7 +264,7 @@ class TiebaParser(BaseParser):
         """强制贴吧返回包含首帖正文的旧版服务端页面。"""
         cookie_parts = []
         legacy_switch_added = False
-        raw_cookie = self.config.get("tieba_cookies", "")
+        raw_cookie = cookie_config_value(self.config, "tieba_cookies")
         for name, value in parse_cookie_header(raw_cookie):
             if name == "TIEBA_NEW_PC":
                 if legacy_switch_added:

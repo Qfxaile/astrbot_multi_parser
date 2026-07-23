@@ -169,6 +169,42 @@ async def test_tieba_qr_login_rejects_untrusted_qr_url():
 
 
 @pytest.mark.asyncio
+async def test_tieba_qr_login_accepts_official_host_without_scheme():
+    requested_urls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.url.path == "/v2/api/getqrcode":
+            return jsonp_response(
+                request,
+                {
+                    "errno": 0,
+                    "sign": "one-time-sign",
+                    "imgurl": (
+                        "passport.baidu.com/v2/api/qrcode"
+                        "?sign=one-time-sign"
+                    ),
+                },
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"Content-Type": "image/png"},
+            content=b"\x89PNG\r\n\x1a\nqr-image",
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = TiebaLoginProvider({}, client=client)
+        challenge = await provider.create_qr_challenge()
+
+    assert challenge.image_bytes.startswith(b"\x89PNG")
+    assert requested_urls[1].startswith(
+        "https://passport.baidu.com/v2/api/qrcode?"
+    )
+    assert "/v2/api/passport.baidu.com/" not in requested_urls[1]
+
+
+@pytest.mark.asyncio
 async def test_tieba_qr_login_rejects_untrusted_success_redirect():
     def redirect_response(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

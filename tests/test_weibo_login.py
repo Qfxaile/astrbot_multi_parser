@@ -20,6 +20,26 @@ def jsonp_response(request: httpx.Request, payload: dict) -> httpx.Response:
     )
 
 
+def test_weibo_confirmation_token_supports_bounded_nested_payloads():
+    token = "确认令牌 value"
+
+    assert (
+        WeiboLoginProvider._find_sso_token(
+            {"data": {"result": {"login": {"alt": token}}}}
+        )
+        == token
+    )
+
+
+def test_weibo_confirmation_token_rejects_control_characters():
+    assert (
+        WeiboLoginProvider._find_sso_token(
+            {"data": {"alt": "token\nforbidden"}}
+        )
+        == ""
+    )
+
+
 @pytest.mark.asyncio
 async def test_weibo_qr_login_completes_sso_and_keeps_only_minimal_cookie():
     requests = []
@@ -51,11 +71,12 @@ async def test_weibo_qr_login_completes_sso_and_keeps_only_minimal_cookie():
                 request,
                 {
                     "retcode": 20000000,
-                    "data": {"alt": "ALT-one-time-secret=="},
+                    "data": {"alt": "ALT%2Fone.time-secret=="},
                 },
             )
         if request.url.path == "/sso/login.php":
-            assert request.url.params["alt"] == "ALT-one-time-secret=="
+            assert request.url.params["entry"] == "qrcodesso"
+            assert request.url.params["alt"] == "ALT%2Fone.time-secret=="
             return jsonp_response(
                 request,
                 {
@@ -193,6 +214,46 @@ async def test_weibo_qr_login_rejects_untrusted_success_url_without_alt_leak():
     assert "ALT-sensitive" not in message
     assert "sensitive-ticket" not in message
     assert "evil.example" not in message
+
+
+@pytest.mark.asyncio
+async def test_weibo_qr_login_ignores_untrusted_extra_success_urls():
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/sso/qrcode/check":
+            return jsonp_response(
+                request,
+                {"retcode": 20000000, "data": {"alt": "ALT-secret=="}},
+            )
+        if request.url.path == "/sso/login.php":
+            return jsonp_response(
+                request,
+                {
+                    "retcode": "0",
+                    "crossDomainUrlList": [
+                        "https://evil.example/collect?ticket=secret",
+                        "https://passport.weibo.com/sso/crossdomain?ticket=ok",
+                    ],
+                },
+            )
+        assert request.url.host == "passport.weibo.com"
+        return httpx.Response(
+            200,
+            request=request,
+            headers={
+                "Set-Cookie": "SUB=session-secret; Domain=.weibo.com; Path=/; Secure"
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = WeiboLoginProvider({}, client=client)
+        result = await provider.poll_qr_status("one-time-qrid")
+
+    assert result.state == LoginPollState.SUCCESS
+    assert result.cookie_header == "SUB=session-secret"
+    assert all(request.url.host != "evil.example" for request in requests)
 
 
 @pytest.mark.asyncio
